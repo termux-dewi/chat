@@ -11,14 +11,12 @@ export default {
     const cookie = request.headers.get("Cookie") || "";
     const username = (cookie.match(/user_session=([^;]+)/) || [])[1];
 
-    // Helper: Ambil & Parse DB dengan proteksi error
+    // Helper: Ambil DB dengan proteksi charset & format
     const getSafeDB = async (token) => {
       try {
         const raw = await getDriveFile(token);
         const parsed = JSON.parse(raw || '{"users":{}, "privateChats":{}}');
-        // Pastikan users adalah objek, bukan array
         if (!parsed.users || Array.isArray(parsed.users)) parsed.users = {};
-        if (!parsed.privateChats) parsed.privateChats = {};
         return parsed;
       } catch (e) {
         return { users: {}, privateChats: {} };
@@ -28,12 +26,13 @@ export default {
     if (url.pathname === "/api/data") {
       const token = await getAccessToken();
       const db = await getSafeDB(token);
-      // Update Heartbeat
       if (username && db.users[username]) {
         db.users[username].lastSeen = Date.now();
         await updateDriveFile(token, JSON.stringify(db, null, 2));
       }
-      return new Response(JSON.stringify(db), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(db), { 
+        headers: { "Content-Type": "application/json; charset=utf-8" } 
+      });
     }
 
     if (url.pathname === "/logout") {
@@ -48,13 +47,13 @@ export default {
 
       if (action === "register" || action === "login") {
         const user = (formData.get("username") || "").trim();
-        if (!user) return new Response("Username minimal 1 karakter", { status: 400 });
+        if (!user) return new Response("Input tidak valid", { status: 400 });
 
         if (action === "register") {
-          if (db.users[user]) return new Response("User sudah ada", { status: 400 });
-          db.users[user] = { name: user, bio: "Hey there!", avatar: "", lastSeen: Date.now() };
+          if (db.users[user]) return new Response("Username sudah dipakai", { status: 400 });
+          db.users[user] = { name: user, bio: "Available", avatar: "", lastSeen: Date.now() };
         } else {
-          if (!db.users[user]) return new Response("User tidak ditemukan", { status: 400 });
+          if (!db.users[user]) return new Response("Akun tidak ada", { status: 400 });
         }
         
         await updateDriveFile(token, JSON.stringify(db, null, 2));
@@ -66,48 +65,33 @@ export default {
           db.users[username].bio = formData.get("bio") || "";
           db.users[username].avatar = formData.get("avatar") || "";
           await updateDriveFile(token, JSON.stringify(db, null, 2));
-          return new Response(JSON.stringify({ status: "success" }));
+          return new Response(JSON.stringify({ status: "success" }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
         }
-      }
-
-      if (action === "uploadMedia") {
-        const file = formData.get("file");
-        const driveRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=media', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': file.type },
-          body: await file.arrayBuffer()
-        });
-        const fileData = await driveRes.json();
-        await fetch(`https://www.googleapis.com/drive/v3/files/${fileData.id}/permissions`, {
-          method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: 'reader', type: 'anyone' })
-        });
-        return new Response(JSON.stringify({ url: `https://lh3.googleusercontent.com/u/0/d/${fileData.id}` }));
       }
 
       if (action === "chat" && username) {
         const to = formData.get("to");
         const cId = [username, to].sort().join("_");
+        if (!db.privateChats) db.privateChats = {};
         if (!db.privateChats[cId]) db.privateChats[cId] = [];
         db.privateChats[cId].push({
           id: Date.now().toString(), from: username, text: formData.get("message") || "",
           type: formData.get("type") || "text", mediaUrl: formData.get("mediaUrl") || null,
-          time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-          deletedFor: []
+          time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
         });
         await updateDriveFile(token, JSON.stringify(db, null, 2));
-        return new Response(JSON.stringify({ status: "success" }));
+        return new Response(JSON.stringify({ status: "success" }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
       }
     }
 
-    if (!username) return new Response(renderAuthPage(), { headers: { "Content-Type": "text/html" } });
+    if (!username) return new Response(renderAuthPage(), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     const token = await getAccessToken();
     const db = await getSafeDB(token);
-    return new Response(renderMainApp(username, db), { headers: { "Content-Type": "text/html" } });
+    return new Response(renderMainApp(username, db), { headers: { "Content-Type": "text/html; charset=utf-8" } });
   }
 };
 
-// --- Google Drive Helpers ---
+// --- Drive Helpers ---
 async function getAccessToken() {
   const pem = CONFIG.privateKey.replace(/\\n/g, '\n');
   const privateKey = await crypto.subtle.importKey('pkcs8', str2ab(atob(pem.split('-----')[2].replace(/\s/g, ''))), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
@@ -126,30 +110,26 @@ function str2ab(str) { const buf = new ArrayBuffer(str.length); const bufView = 
 // --- UI Components ---
 function renderAuthPage() {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script></head>
-  <body class="bg-[#0b0f1a] flex items-center justify-center min-h-screen text-white p-6 font-sans">
+  <body class="bg-[#0b0f1a] flex items-center justify-center min-h-screen text-white p-6">
     <div class="w-full max-w-sm">
-      <div class="text-center mb-10">
-        <h1 class="text-5xl font-black text-blue-500 italic tracking-tighter mb-2">THE HUB</h1>
-        <p class="text-xs text-zinc-500 uppercase tracking-widest font-bold">Private & Secure</p>
-      </div>
-      <div class="bg-zinc-900/50 p-8 rounded-[2.5rem] border border-zinc-800 shadow-2xl backdrop-blur-md">
+      <div class="text-center mb-10"><h1 class="text-5xl font-black text-blue-500 italic mb-2 tracking-tighter">THE HUB</h1><p class="text-[10px] text-zinc-500 uppercase tracking-[0.3em]">Secure Messenger</p></div>
+      <div class="bg-zinc-900/50 p-8 rounded-[2.5rem] border border-zinc-800 backdrop-blur-md shadow-2xl">
         <div class="flex gap-4 mb-8">
-          <button id="tabLogin" onclick="setTab('login')" class="flex-1 py-2 border-b-2 border-blue-500 font-black text-xs uppercase">Login</button>
-          <button id="tabReg" onclick="setTab('register')" class="flex-1 py-2 border-b-2 border-transparent text-zinc-600 font-black text-xs uppercase">Daftar</button>
+          <button id="tabL" onclick="setTab('login')" class="flex-1 py-2 border-b-2 border-blue-500 font-bold text-xs uppercase">Login</button>
+          <button id="tabR" onclick="setTab('register')" class="flex-1 py-2 border-b-2 border-transparent text-zinc-600 font-bold text-xs uppercase">Daftar</button>
         </div>
-        <form method="POST" id="authForm">
-          <input type="hidden" name="action" id="authAction" value="login">
-          <input name="username" required placeholder="Username..." class="w-full p-4 rounded-2xl bg-zinc-800 border border-zinc-700 mb-6 outline-none focus:border-blue-600 transition-all text-sm">
-          <button id="submitBtn" class="w-full bg-blue-600 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-blue-700 transition-all">Masuk</button>
+        <form method="POST"><input type="hidden" name="action" id="act" value="login">
+          <input name="username" required placeholder="Username..." class="w-full p-4 rounded-2xl bg-zinc-800 border border-zinc-700 mb-6 outline-none text-sm text-white focus:border-blue-600">
+          <button id="btn" class="w-full bg-blue-600 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-blue-700 active:scale-95 transition-all">Masuk</button>
         </form>
       </div>
     </div>
     <script>
       function setTab(t) {
-        document.getElementById('authAction').value = t;
-        document.getElementById('submitBtn').innerText = t === 'login' ? 'Masuk' : 'Buat Akun';
-        document.getElementById('tabLogin').className = t === 'login' ? 'flex-1 py-2 border-b-2 border-blue-500 font-black text-xs uppercase' : 'flex-1 py-2 border-b-2 border-transparent text-zinc-600 font-black text-xs uppercase';
-        document.getElementById('tabReg').className = t === 'register' ? 'flex-1 py-2 border-b-2 border-blue-500 font-black text-xs uppercase' : 'flex-1 py-2 border-b-2 border-transparent text-zinc-600 font-black text-xs uppercase';
+        document.getElementById('act').value = t;
+        document.getElementById('btn').innerText = t === 'login' ? 'Masuk' : 'Buat Akun';
+        document.getElementById('tabL').className = t === 'login' ? 'flex-1 py-2 border-b-2 border-blue-500 font-bold text-xs uppercase' : 'flex-1 py-2 border-b-2 border-transparent text-zinc-600 font-bold text-xs uppercase';
+        document.getElementById('tabR').className = t === 'register' ? 'flex-1 py-2 border-b-2 border-blue-500 font-bold text-xs uppercase' : 'flex-1 py-2 border-b-2 border-transparent text-zinc-600 font-bold text-xs uppercase';
       }
     </script>
   </body></html>`;
@@ -157,51 +137,41 @@ function renderAuthPage() {
 
 function renderMainApp(currentUser, db) {
   const myData = db.users[currentUser] || { name: currentUser, bio: "", avatar: "" };
-  return `<!DOCTYPE html><html><head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <script src="https://cdn.tailwindcss.com"></script>
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"><script src="https://cdn.tailwindcss.com"></script>
   <style>
     .safe-bottom { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
     #sidebar { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
     .sidebar-closed { transform: translateX(-100%); }
     @media (min-width: 1024px) { .sidebar-closed { transform: translateX(0); } }
   </style></head>
-  <body class="bg-black text-zinc-300 h-screen flex flex-col overflow-hidden font-sans text-[13px]">
+  <body class="bg-black text-zinc-300 h-screen flex flex-col overflow-hidden font-sans">
     <div class="flex flex-1 overflow-hidden">
       <div id="sidebar" class="fixed lg:static inset-0 w-full lg:w-96 border-r border-zinc-900 bg-[#0b0f1a] z-50 sidebar-closed">
         <div class="p-6 border-b border-zinc-900 flex justify-between items-center">
           <div class="flex items-center gap-3 cursor-pointer" onclick="openProfile()">
-            <img src="\${'${myData.avatar}' || 'https://ui-avatars.com/api/?name=${currentUser}'}" class="w-10 h-10 rounded-full border-2 border-blue-600 bg-zinc-800 object-cover">
-            <div>
-              <div class="text-sm font-black text-white leading-none">${currentUser}</div>
-              <div class="text-[8px] font-bold text-zinc-500 uppercase mt-1">Pengaturan Profil</div>
-            </div>
+            <img src="${myData.avatar || 'https://ui-avatars.com/api/?name='+currentUser}" class="w-10 h-10 rounded-full border-2 border-blue-600 bg-zinc-800 object-cover">
+            <div><div class="text-sm font-black text-white leading-none">${currentUser}</div><div class="text-[8px] font-bold text-zinc-500 uppercase mt-1">Profile</div></div>
           </div>
           <button onclick="toggleSidebar()" class="lg:hidden text-zinc-500 text-2xl">✕</button>
         </div>
-        <div class="p-4 text-[10px] font-black text-zinc-600 uppercase tracking-[0.2em] flex justify-between">
-          Kontak <span id="onlineCount" class="text-green-500">0 Online</span>
-        </div>
+        <div class="p-4 text-[10px] font-black text-zinc-600 uppercase tracking-widest flex justify-between">Kontak <span id="onlineCount" class="text-green-500">0 Online</span></div>
         <div id="userList" class="p-2 space-y-1 overflow-y-auto h-[calc(100%-140px)] pb-20"></div>
       </div>
 
       <div class="flex-1 flex flex-col bg-black relative">
         <div class="p-4 bg-[#0b0f1a] border-b border-zinc-900 flex items-center gap-4">
-          <button onclick="toggleSidebar()" class="text-blue-500 p-2">
-            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"/></svg>
-          </button>
+          <button onclick="toggleSidebar()" class="text-blue-500"><svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"/></svg></button>
           <div id="activeChatName" class="font-black text-white uppercase text-xs tracking-widest italic">The Hub</div>
+          <div class="ml-auto"><a href="/logout" class="text-[9px] font-black opacity-30 hover:opacity-100">EXIT</a></div>
         </div>
-        <div id="chatBox" class="flex-1 p-6 overflow-y-auto flex flex-col gap-4">
-           <div class="m-auto text-center opacity-10 font-black uppercase tracking-[0.5em]">Pilih teman untuk mengobrol</div>
+        <div id="chatBox" class="flex-1 p-6 overflow-y-auto flex flex-col gap-4 text-sm">
+           <div class="m-auto text-center opacity-10 font-black uppercase tracking-[0.5em]">Pilih Kontak</div>
         </div>
-        <div id="inputBar" class="hidden p-4 bg-[#0b0f1a] safe-bottom border-t border-zinc-900 transition-all">
+        <div id="inputBar" class="hidden p-4 bg-[#0b0f1a] safe-bottom border-t border-zinc-900">
           <div class="flex items-center gap-3 bg-zinc-900 p-2 rounded-3xl border border-zinc-800">
-            <label class="w-10 h-10 flex items-center justify-center text-blue-500 text-2xl cursor-pointer hover:bg-zinc-800 rounded-full transition-all">
-              + <input type="file" class="hidden" id="fileInp" onchange="handleFile(this)">
-            </label>
-            <input id="msgInput" autocomplete="off" placeholder="Ketik pesan..." class="flex-1 bg-transparent p-2 outline-none text-white">
-            <button id="sendBtn" onclick="sendChat()" class="bg-blue-600 text-white px-6 py-2 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-blue-600/20 transition-all active:scale-95">Send</button>
+            <label class="w-10 h-10 flex items-center justify-center text-blue-500 text-xl cursor-pointer hover:bg-zinc-800 rounded-full transition-all">+ <input type="file" class="hidden" id="fileInp" onchange="handleFile(this)"></label>
+            <input id="msgInput" autocomplete="off" placeholder="Ketik..." class="flex-1 bg-transparent p-2 outline-none text-white">
+            <button onclick="sendChat()" class="bg-blue-600 text-white px-6 py-2 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-blue-600/20 active:scale-95 transition-all">Send</button>
           </div>
         </div>
       </div>
@@ -213,7 +183,7 @@ function renderMainApp(currentUser, db) {
           <img id="myAvatar" src="${myData.avatar || 'https://ui-avatars.com/api/?name='+currentUser}" class="w-24 h-24 rounded-full border-4 border-blue-600 bg-zinc-800 object-cover">
           <label class="absolute bottom-0 right-0 bg-blue-600 p-2 rounded-full cursor-pointer shadow-lg"><input type="file" class="hidden" onchange="updateAvatar(this)">📸</label>
         </div>
-        <textarea id="myBio" placeholder="Bio singkat..." class="w-full bg-zinc-800 p-4 rounded-2xl text-xs text-zinc-400 mb-6 outline-none border border-zinc-700 h-24 resize-none">${myData.bio}</textarea>
+        <textarea id="myBio" class="w-full bg-zinc-800 p-4 rounded-2xl text-xs text-zinc-400 mb-6 outline-none border border-zinc-700 h-24 resize-none" placeholder="Bio...">${myData.bio}</textarea>
         <button onclick="saveProfile()" class="w-full bg-blue-600 py-4 rounded-2xl font-black text-[10px] uppercase mb-3">Simpan</button>
         <button onclick="closeProfile()" class="text-zinc-500 text-[10px] font-black uppercase">Batal</button>
       </div>
@@ -249,14 +219,14 @@ function renderMainApp(currentUser, db) {
           if (hasNew && selectedUser !== u) document.getElementById('notifSound').play().catch(()=>{});
 
           return \`
-            <div onclick="selectUser('\${u}')" class="p-4 flex items-center gap-4 hover:bg-zinc-900 rounded-[2rem] cursor-pointer transition-all \${selectedUser === u ? 'bg-zinc-800' : ''}">
+            <div onclick="selectUser('\${u}')" class="p-4 flex items-center gap-4 hover:bg-zinc-900 rounded-3xl cursor-pointer \${selectedUser === u ? 'bg-zinc-800' : ''}">
               <div class="relative">
                 <img src="\${uInfo.avatar || 'https://ui-avatars.com/api/?name='+u}" class="w-12 h-12 rounded-full border-2 \${isOnline ? 'border-green-500' : 'border-zinc-800'} object-cover">
                 \${isOnline ? '<div class="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-black"></div>' : ''}
               </div>
               <div class="flex-1 overflow-hidden">
-                <div class="flex justify-between items-center"><span class="font-black text-zinc-200 uppercase text-[11px] truncate">\${u}</span>\${hasNew ? '<div class="w-2 h-2 bg-red-600 rounded-full animate-pulse"></div>' : ''}</div>
-                <div class="text-[9px] font-bold \${isOnline ? 'text-green-500' : 'text-zinc-600'} uppercase truncate">\${isOnline ? 'Aktif Sekarang' : (uInfo.bio || 'Offline')}</div>
+                <div class="flex justify-between items-center"><span class="font-black text-zinc-200 uppercase text-xs truncate">\${u}</span>\${hasNew ? '<div class="w-2 h-2 bg-red-600 rounded-full animate-pulse"></div>' : ''}</div>
+                <div class="text-[9px] font-bold \${isOnline ? 'text-green-500' : 'text-zinc-600'} uppercase truncate">\${isOnline ? 'Online' : (uInfo.bio || 'Offline')}</div>
               </div>
             </div>\`;
         }).join('');
@@ -269,8 +239,8 @@ function renderMainApp(currentUser, db) {
           const wasAtBottom = box.scrollHeight - box.scrollTop <= box.clientHeight + 100;
           box.innerHTML = msgs.map(m => \`
             <div class="flex flex-col \${m.from === currentUser ? 'items-end' : 'items-start'}">
-              <div class="max-w-[85%] p-3.5 rounded-2xl \${m.from === currentUser ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-zinc-900 border border-zinc-800 rounded-tl-none'} shadow-xl transition-all">
-                <div class="text-sm">\${m.type === 'image' ? '<img src="'+m.mediaUrl+'" class="rounded-xl mb-2 max-h-64">' : ''}\${m.text}</div>
+              <div class="max-w-[85%] p-4 rounded-2xl \${m.from === currentUser ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-zinc-900 border border-zinc-800 rounded-tl-none'}">
+                <div>\${m.type === 'image' ? '<img src="'+m.mediaUrl+'" class="rounded-xl mb-2 max-h-64">' : ''}\${m.text}</div>
                 <div class="text-[8px] opacity-40 mt-1 font-black uppercase text-right">\${m.time}</div>
               </div>
             </div>\`).join('');
@@ -288,9 +258,7 @@ function renderMainApp(currentUser, db) {
       }
 
       async function saveProfile() {
-        const bio = document.getElementById('myBio').value;
-        const avatar = document.getElementById('myAvatar').src;
-        const fd = new FormData(); fd.append('action', 'updateProfile'); fd.append('bio', bio); fd.append('avatar', avatar);
+        const fd = new FormData(); fd.append('action', 'updateProfile'); fd.append('bio', document.getElementById('myBio').value); fd.append('avatar', document.getElementById('myAvatar').src);
         await fetch('/', { method: 'POST', body: fd }); closeProfile(); update();
       }
 
@@ -309,15 +277,9 @@ function renderMainApp(currentUser, db) {
         await fetch('/', { method: 'POST', body: msgFd }); update();
       }
 
-      function selectUser(u) {
-        selectedUser = u; 
-        document.getElementById('activeChatName').innerText = u;
-        document.getElementById('inputBar').classList.remove('hidden');
-        if(window.innerWidth < 1024) toggleSidebar();
-        isFirst = true; update();
-      }
+      function selectUser(u) { selectedUser = u; document.getElementById('activeChatName').innerText = u; document.getElementById('inputBar').classList.remove('hidden'); if(window.innerWidth < 1024) toggleSidebar(); isFirst = true; update(); }
 
       setInterval(update, 5000); update();
     </script>
   </body></html>`;
-        }
+                                   }
