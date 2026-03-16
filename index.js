@@ -48,6 +48,7 @@ export default {
         if (username) {
           const to = formData.get("to");
           const chatId = [username, to].sort().join("_");
+          if (!db.privateChats) db.privateChats = {};
           if (!db.privateChats[chatId]) db.privateChats[chatId] = [];
 
           if (action === "chat") {
@@ -55,11 +56,12 @@ export default {
             let fileUrl = null, fileType = null;
             if (file && file.size > 0) {
               const upload = await uploadToDrive(token, file);
-              fileUrl = `https://www.googleapis.com/drive/v3/files/${upload.id}?alt=media`;
+              // Perbaikan format URL agar bisa ditampilkan langsung
+              fileUrl = `https://www.googleapis.com/drive/v3/files/${upload.id}?alt=media&export=download`;
               fileType = file.type.startsWith("video") ? "video" : "image";
             }
             db.privateChats[chatId].push({
-              id: "m_" + Date.now(), from: username, text: formData.get("message"),
+              id: "m_" + Date.now(), from: username, text: formData.get("message") || "",
               file: fileUrl, fileType: fileType, edited: false,
               time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
             });
@@ -82,27 +84,20 @@ export default {
   }
 };
 
+// --- AUTH & DRIVE LOGIC ---
 async function getAccessToken() {
   const pem = CONFIG.privateKey.trim().replace(/\\n/g, '\n');
   const pemBody = pem.split('-----')[2].replace(/\s/g, '');
   const privateKey = await crypto.subtle.importKey('pkcs8', Uint8Array.from(atob(pemBody), c => c.charCodeAt(0)), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
-  
   const header = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).replace(/=/g, '');
   const now = Math.floor(Date.now() / 1000) - 30;
   const payload = btoa(JSON.stringify({ iss: CONFIG.clientEmail, scope: 'https://www.googleapis.com/auth/drive', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now })).replace(/=/g, '');
-  
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', privateKey, new TextEncoder().encode(`${header}.${payload}`));
   const jwt = `${header}.${payload}.${btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\//g, '_').replace(/\+/g, '-').replace(/=/g, '')}`;
-  
   const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: jwt
-    })
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt })
   });
-  
   const data = await res.json();
   if (!data.access_token) throw new Error(JSON.stringify(data));
   return data.access_token;
@@ -117,6 +112,7 @@ async function uploadToDrive(token, file) {
     method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body
   });
   const data = await res.json();
+  // Memberikan izin akses publik ke file agar bisa dimuat di browser
   await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
     method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ role: 'reader', type: 'anyone' })
@@ -130,7 +126,7 @@ function updateDriveFile(token, content) {
   });
 }
 
-// --- UI (100% SAMA DENGAN index.js.bak) ---
+// --- UI COMPONENTS ---
 function renderAuthPage() {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script></head>
   <body class="bg-[#0b0f1a] flex items-center justify-center min-h-screen text-white p-6 font-sans uppercase font-black italic tracking-tighter text-xs">
@@ -138,9 +134,9 @@ function renderAuthPage() {
       <h1 class="text-5xl text-blue-500 mb-10">THE HUB</h1>
       <form method="POST">
         <input type="hidden" name="action" id="act" value="login">
-        <input name="username" required placeholder="Username" class="w-full p-4 rounded-2xl bg-black mb-4 outline-none border border-zinc-800 focus:border-blue-600 transition-all shadow-inner">
-        <input name="password" type="password" required placeholder="Password" class="w-full p-4 rounded-2xl bg-black mb-8 outline-none border border-zinc-800 focus:border-blue-600 transition-all shadow-inner">
-        <button id="btn" class="w-full bg-blue-600 py-4 rounded-2xl shadow-lg shadow-blue-900/20 active:scale-95 transition-all">Login</button>
+        <input name="username" required placeholder="Username" class="w-full p-4 rounded-2xl bg-black mb-4 outline-none border border-zinc-800 focus:border-blue-600 transition-all">
+        <input name="password" type="password" required placeholder="Password" class="w-full p-4 rounded-2xl bg-black mb-8 outline-none border border-zinc-800 focus:border-blue-600 transition-all">
+        <button id="btn" class="w-full bg-blue-600 py-4 rounded-2xl shadow-lg shadow-blue-900/20">Login</button>
         <div class="flex justify-center gap-6 mt-8 opacity-40">
           <button type="button" onclick="document.getElementById('act').value='login'; document.getElementById('btn').innerText='Login'">Login</button>
           <button type="button" onclick="document.getElementById('act').value='register'; document.getElementById('btn').innerText='Daftar'">Daftar</button>
@@ -151,83 +147,121 @@ function renderAuthPage() {
 }
 
 function renderMainApp(user) {
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script>
-  <style>#sidebar { transition: 0.3s; } .sidebar-closed { transform: translateX(-100%); }</style></head>
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    #sidebar { transition: 0.3s; } 
+    .sidebar-closed { transform: translateX(-100%); }
+    #chatBox { scrollbar-width: none; -ms-overflow-style: none; }
+    #chatBox::-webkit-scrollbar { display: none; }
+  </style></head>
   <body class="bg-black text-zinc-300 h-screen flex flex-col font-sans overflow-hidden uppercase font-black italic tracking-tighter text-[10px]">
-    <div class="flex flex-1 overflow-hidden">
-      <div id="sidebar" class="fixed lg:static inset-0 w-80 border-r border-zinc-900 bg-[#0b0f1a] z-50 sidebar-closed lg:transform-none flex flex-col">
+    <div class="flex flex-1 overflow-hidden relative">
+      <div id="sidebar" class="fixed lg:static inset-y-0 left-0 w-72 border-r border-zinc-900 bg-[#0b0f1a] z-[60] sidebar-closed lg:transform-none flex flex-col shadow-2xl">
         <div class="p-6 border-b border-zinc-900 flex justify-between items-center bg-[#0b0f1a]">
-          <div class="text-blue-500">${user}</div>
-          <button onclick="toggleSidebar()" class="lg:hidden">✕</button>
+          <div class="text-blue-500 truncate mr-2">${user}</div>
+          <button onclick="toggleSidebar()" class="lg:hidden text-zinc-500 px-2">✕</button>
         </div>
         <div id="userList" class="flex-1 overflow-y-auto p-2"></div>
       </div>
-      <div class="flex-1 flex flex-col">
-        <div class="p-4 bg-[#0b0f1a] border-b border-zinc-900 flex justify-between items-center shadow-lg">
-          <button onclick="toggleSidebar()" class="lg:hidden text-blue-500">☰</button>
-          <div id="chatName">THE HUB</div>
-          <a href="/logout" class="opacity-30 hover:opacity-100 transition-all">EXIT</a>
+
+      <div class="flex-1 flex flex-col min-w-0 bg-black">
+        <div class="p-4 bg-[#0b0f1a] border-b border-zinc-900 flex justify-between items-center z-40">
+          <button onclick="toggleSidebar()" class="lg:hidden text-blue-500 p-2">☰</button>
+          <div id="chatName" class="truncate mx-2">THE HUB</div>
+          <a href="/logout" class="opacity-30 hover:opacity-100 transition-all p-2">EXIT</a>
         </div>
-        <div id="chatBox" class="flex-1 p-6 overflow-y-auto flex flex-col gap-4 bg-black"></div>
-        <div id="inputBar" class="hidden p-4 bg-zinc-900/50 border-t border-zinc-800">
-          <div class="flex items-center gap-2">
-            <label class="bg-zinc-800 h-12 w-12 flex items-center justify-center rounded-xl cursor-pointer hover:bg-zinc-700 shrink-0 shadow-lg">
-              <input type="file" id="fileInput" class="hidden" onchange="document.getElementById('prev').classList.remove('hidden')">
-              <span class="text-2xl text-blue-500">+</span>
+        
+        <div id="chatBox" class="flex-1 p-4 overflow-y-auto flex flex-col gap-4 pb-20"></div>
+
+        <div id="inputBar" class="hidden absolute bottom-0 left-0 right-0 p-4 bg-[#0b0f1a]/95 backdrop-blur-md border-t border-zinc-900 z-50 lg:static">
+          <div class="flex items-center gap-2 max-w-5xl mx-auto">
+            <label class="bg-zinc-800 h-10 w-10 flex items-center justify-center rounded-xl cursor-pointer hover:bg-zinc-700 shrink-0 shadow-lg">
+              <input type="file" id="fileInput" class="hidden" onchange="handleFileChange()">
+              <span class="text-xl text-blue-500">+</span>
             </label>
-            <input id="msgInput" class="flex-1 bg-black h-12 px-4 rounded-xl outline-none border border-zinc-800 focus:border-blue-600 shadow-inner" placeholder="MESSAGE...">
-            <button onclick="sendChat()" class="bg-blue-600 h-12 px-6 rounded-xl text-white shadow-lg active:scale-95 transition-all">SEND</button>
+            <input id="msgInput" class="flex-1 bg-black h-10 px-4 rounded-xl outline-none border border-zinc-800 focus:border-blue-600 shadow-inner" placeholder="MESSAGE...">
+            <button onclick="sendChat()" id="sendBtn" class="bg-blue-600 h-10 px-5 rounded-xl text-white shadow-lg active:scale-95 transition-all">SEND</button>
           </div>
-          <div id="prev" class="hidden text-blue-500 mt-2 ml-14 animate-pulse">MEDIA READY...</div>
+          <div id="prev" class="hidden text-blue-500 mt-2 text-[8px] text-center animate-pulse italic">MEDIA READY...</div>
         </div>
       </div>
     </div>
+
     <script>
       let selectedUser = "";
       function toggleSidebar() { document.getElementById('sidebar').classList.toggle('sidebar-closed'); }
+      function handleFileChange() { document.getElementById('prev').classList.remove('hidden'); }
+
       async function update() {
         const res = await fetch('/api/data');
         if(!res.ok) return;
         const db = await res.json();
         const users = Object.keys(db.users || {}).filter(u => u !== "${user}");
         document.getElementById('userList').innerHTML = users.map(u => \`
-          <div onclick="selectUser('\${u}')" class="p-4 mb-1 rounded-2xl cursor-pointer transition-all \${selectedUser === u ? 'bg-zinc-800 border-l-4 border-blue-500 text-white shadow-xl' : 'hover:bg-zinc-900'}">
-            <div>\${u}</div>
+          <div onclick="selectUser('\${u}')" class="p-4 mb-1 rounded-2xl cursor-pointer transition-all \${selectedUser === u ? 'bg-zinc-800 border-l-4 border-blue-500 text-white' : 'hover:bg-zinc-900'}">
+            <div class="truncate">\${u}</div>
           </div>\`).join('');
 
         if(selectedUser) {
           const cId = ["${user}", selectedUser].sort().join("_");
           const msgs = (db.privateChats && db.privateChats[cId]) || [];
-          document.getElementById('chatBox').innerHTML = msgs.map(m => \`
+          const box = document.getElementById('chatBox');
+          const isAtBottom = box.scrollHeight - box.clientHeight <= box.scrollTop + 100;
+
+          box.innerHTML = msgs.map(m => \`
             <div class="flex flex-col \${m.from === "${user}" ? 'items-end' : 'items-start'} group">
-              <div class="max-w-[85%] p-4 rounded-2xl shadow-2xl \${m.from === "${user}" ? 'bg-blue-600 rounded-tr-none' : 'bg-zinc-800 rounded-tl-none'}">
-                \${m.file ? (m.fileType === 'video' ? \`<video src="\${m.file}" controls class="rounded-lg mb-2 max-w-full"></video>\` : \`<img src="\${m.file}" class="rounded-lg mb-2 max-w-full" />\`) : ''}
-                <div class="text-[11px] text-white not-italic tracking-normal">\${m.text}</div>
+              <div class="max-w-[85%] p-3 rounded-2xl shadow-lg \${m.from === "${user}" ? 'bg-blue-600 rounded-tr-none' : 'bg-zinc-800 rounded-tl-none'}">
+                \${m.file ? (m.fileType === 'video' ? 
+                  \`<video src="\${m.file}" controls class="rounded-lg mb-2 max-w-full outline-none"></video>\` : 
+                  \`<img src="\${m.file}" class="rounded-lg mb-2 max-w-full block" loading="lazy" />\`) : ''}
+                <div class="text-[11px] text-white not-italic tracking-normal break-words">\${m.text}</div>
                 <div class="flex items-center gap-3 mt-2 opacity-40 text-[7px]">
                   <span>\${m.time} \${m.edited ? '(EDITED)' : ''}</span>
-                  \${m.from === "${user}" ? \`<button onclick="editMsg('\${m.id}', '\${m.text}')" class="text-yellow-400 hover:scale-110 transition-transform">EDIT</button>\` : ''}
+                  \${m.from === "${user}" ? \`<button onclick="editMsg('\${m.id}', '\${m.text}')" class="text-yellow-400">EDIT</button>\` : ''}
                 </div>
               </div>
             </div>\`).join('');
+          
+          if(isAtBottom) box.scrollTop = box.scrollHeight;
         }
       }
-      function selectUser(u) { selectedUser = u; document.getElementById('chatName').innerText = u; document.getElementById('inputBar').classList.remove('hidden'); update(); if(window.innerWidth < 1024) toggleSidebar(); }
+
+      function selectUser(u) { 
+        selectedUser = u; 
+        document.getElementById('chatName').innerText = u; 
+        document.getElementById('inputBar').classList.remove('hidden'); 
+        update(); 
+        if(window.innerWidth < 1024) toggleSidebar(); 
+        setTimeout(() => {
+          const box = document.getElementById('chatBox');
+          box.scrollTop = box.scrollHeight;
+        }, 300);
+      }
+
       async function sendChat() {
-        const i = document.getElementById('msgInput'), f = document.getElementById('fileInput');
+        const i = document.getElementById('msgInput'), f = document.getElementById('fileInput'), btn = document.getElementById('sendBtn');
         if(!i.value && !f.files[0]) return;
+        
+        btn.disabled = true; btn.innerText = "...";
         const fd = new FormData(); fd.append('action', 'chat'); fd.append('to', selectedUser); fd.append('message', i.value);
         if(f.files[0]) fd.append('file', f.files[0]);
+        
         i.value = ""; f.value = ""; document.getElementById('prev').classList.add('hidden');
-        await fetch('/', { method: 'POST', body: fd }); update();
+        await fetch('/', { method: 'POST', body: fd }); 
+        btn.disabled = false; btn.innerText = "SEND";
+        update();
       }
+
       function editMsg(id, old) {
         const n = prompt("Edit:", old);
-        if(n && n !== old) {
+        if(n !== null && n !== old) {
           const fd = new FormData(); fd.append('action', 'edit'); fd.append('to', selectedUser); fd.append('msgId', id); fd.append('message', n);
           fetch('/', { method: 'POST', body: fd }).then(update);
         }
       }
-      setInterval(update, 5000); update();
+
+      setInterval(update, 4000); 
+      update();
     </script>
   </body></html>`;
-              }
+                                     }
