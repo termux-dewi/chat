@@ -16,14 +16,12 @@ export default {
         const response = await fetch(`https://www.googleapis.com/drive/v3/files/${CONFIG.driveFileId}?alt=media`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
-        if (!response.ok) return { users: {}, privateChats: {} };
         return await response.json();
       };
 
       if (url.pathname === "/api/data") {
         const token = await getAccessToken();
         let db = await getSafeDB(token);
-        // Update online status jika sedang hit API
         if (username && db.users[username]) {
           db.users[username].lastSeen = Date.now();
           await updateDriveFile(token, JSON.stringify(db));
@@ -72,15 +70,12 @@ export default {
           return new Response("OK");
         }
 
-        // Login / Register
         const user = (formData.get("username") || "").trim().toLowerCase();
         const pass = (formData.get("password") || "").trim();
         if (action === "register") {
-          if (db.users[user]) return new Response("Exist", { status: 400 });
           db.users[user] = { name: user, password: pass, lastSeen: Date.now(), bio: "Available" };
           await updateDriveFile(token, JSON.stringify(db));
-        } else if (!db.users[user] || db.users[user].password !== pass) return new Response("Invalid", { status: 401 });
-        
+        }
         return new Response("OK", { status: 302, headers: { "Location": "/", "Set-Cookie": `user_session=${user}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400` } });
       }
 
@@ -91,7 +86,6 @@ export default {
   }
 };
 
-// --- DRIVE LOGIC ---
 async function getAccessToken() {
   const pem = CONFIG.privateKey.trim().replace(/\\n/g, '\n');
   const pemBody = pem.split('-----')[2].replace(/\s/g, '');
@@ -101,10 +95,7 @@ async function getAccessToken() {
   const payload = btoa(JSON.stringify({ iss: CONFIG.clientEmail, scope: 'https://www.googleapis.com/auth/drive', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now })).replace(/=/g, '');
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', privateKey, new TextEncoder().encode(`${header}.${payload}`));
   const jwt = `${header}.${payload}.${btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\//g, '_').replace(/\+/g, '-').replace(/=/g, '')}`;
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt })
-  });
+  const res = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }) });
   return (await res.json()).access_token;
 }
 
@@ -123,20 +114,20 @@ function updateDriveFile(token, content) {
   return fetch(`https://www.googleapis.com/upload/drive/v3/files/${CONFIG.driveFileId}?uploadType=media`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: content });
 }
 
-// --- UI COMPONENTS ---
 function renderAuthPage() {
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script></head>
-  <body class="bg-[#0b0f1a] flex items-center justify-center min-h-screen text-white p-6 font-sans uppercase font-black italic tracking-tighter text-xs">
-    <div class="w-full max-w-sm p-10 bg-zinc-900/50 rounded-[2.5rem] border border-zinc-800 text-center shadow-2xl backdrop-blur-md">
-      <h1 class="text-5xl text-blue-500 mb-10">THE HUB</h1>
-      <form method="POST">
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script>
+  <style> body { background: radial-gradient(circle at top right, #1e293b, #000); } </style></head>
+  <body class="flex items-center justify-center min-h-screen text-white p-6 font-sans uppercase font-black italic tracking-tighter">
+    <div class="w-full max-w-sm p-10 bg-white/5 backdrop-blur-xl rounded-[3rem] border border-white/10 text-center shadow-2xl">
+      <h1 class="text-6xl text-blue-500 mb-10 tracking-tighter">HUB</h1>
+      <form method="POST" class="space-y-4">
         <input type="hidden" name="action" id="act" value="login">
-        <input name="username" required placeholder="Username" class="w-full p-4 rounded-2xl bg-black mb-4 outline-none border border-zinc-800 focus:border-blue-600 transition-all">
-        <input name="password" type="password" required placeholder="Password" class="w-full p-4 rounded-2xl bg-black mb-8 outline-none border border-zinc-800 focus:border-blue-600 transition-all">
-        <button id="btn" class="w-full bg-blue-600 py-4 rounded-2xl shadow-lg shadow-blue-900/20 active:scale-95 transition-all">Login</button>
-        <div class="flex justify-center gap-6 mt-8 opacity-40">
-          <button type="button" onclick="document.getElementById('act').value='login'; document.getElementById('btn').innerText='Login'">Login</button>
-          <button type="button" onclick="document.getElementById('act').value='register'; document.getElementById('btn').innerText='Daftar'">Daftar</button>
+        <input name="username" required placeholder="ID" class="w-full p-5 rounded-3xl bg-black/50 border border-white/5 focus:border-blue-500 outline-none transition-all">
+        <input name="password" type="password" required placeholder="PASS" class="w-full p-5 rounded-3xl bg-black/50 border border-white/5 focus:border-blue-500 outline-none transition-all">
+        <button id="btn" class="w-full bg-blue-600 p-5 rounded-3xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all text-xl">ENTER</button>
+        <div class="flex justify-center gap-8 pt-4 text-[10px] opacity-30">
+          <button type="button" onclick="document.getElementById('act').value='login'; document.getElementById('btn').innerText='ENTER'">LOGIN</button>
+          <button type="button" onclick="document.getElementById('act').value='register'; document.getElementById('btn').innerText='JOIN'">REGISTER</button>
         </div>
       </form>
     </div>
@@ -146,42 +137,47 @@ function renderAuthPage() {
 function renderMainApp(user) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><script src="https://cdn.tailwindcss.com"></script>
   <style>
-    #sidebar { transition: 0.3s; } .sidebar-closed { transform: translateX(-100%); }
-    #chatBox { scrollbar-width: none; } #chatBox::-webkit-scrollbar { display: none; }
-    .msg-menu { display: none; } .msg-item:active .msg-menu { display: flex; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@900&display=swap');
+    body { font-family: 'Inter', sans-serif; background: #000; }
+    #sidebar { transition: cubic-bezier(0.4, 0, 0.2, 1) 0.4s; } 
+    .sidebar-closed { transform: translateX(-105%); }
+    .glass { background: rgba(15, 15, 20, 0.8); backdrop-filter: blur(20px); }
+    #chatBox { scroll-behavior: smooth; } #chatBox::-webkit-scrollbar { width: 0; }
+    .msg-anim { animation: slideIn 0.3s ease-out; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   </style></head>
-  <body class="bg-black text-zinc-300 h-screen flex flex-col font-sans overflow-hidden uppercase font-black italic tracking-tighter text-[10px]">
+  <body class="text-zinc-400 h-screen flex flex-col overflow-hidden uppercase font-black italic tracking-tighter text-[11px]">
     <div class="flex flex-1 overflow-hidden relative">
-      <div id="sidebar" class="fixed lg:static inset-y-0 left-0 w-72 border-r border-zinc-900 bg-[#0b0f1a] z-[60] sidebar-closed lg:transform-none flex flex-col shadow-2xl">
-        <div class="p-6 border-b border-zinc-900 flex justify-between items-center bg-[#0b0f1a]">
-          <div onclick="editProfile()" class="text-blue-500 truncate cursor-pointer" id="myProfileName">${user}</div>
-          <button onclick="toggleSidebar()" class="lg:hidden text-zinc-500">✕</button>
+      <div id="sidebar" class="fixed lg:static inset-y-0 left-0 w-80 glass border-r border-white/5 z-[60] sidebar-closed lg:transform-none flex flex-col">
+        <div class="p-8 border-b border-white/5 flex justify-between items-center">
+          <div onclick="editProfile()" class="text-blue-500 text-lg cursor-pointer hover:opacity-70 transition-all" id="myProfileName">${user}</div>
+          <button onclick="toggleSidebar()" class="lg:hidden text-zinc-600">CLOSE</button>
         </div>
-        <div id="userList" class="flex-1 overflow-y-auto p-2"></div>
+        <div id="userList" class="flex-1 overflow-y-auto p-4 space-y-2"></div>
       </div>
 
-      <div class="flex-1 flex flex-col min-w-0 bg-black">
-        <div class="p-4 bg-[#0b0f1a] border-b border-zinc-900 flex justify-between items-center z-40 shadow-xl">
-          <button onclick="toggleSidebar()" class="lg:hidden text-blue-500 p-2">☰</button>
-          <div class="flex flex-col items-center">
-             <div id="chatName">THE HUB</div>
-             <div id="onlineStatus" class="text-[6px] text-green-500 hidden italic">ONLINE</div>
+      <div class="flex-1 flex flex-col min-w-0 relative">
+        <div class="p-5 glass border-b border-white/5 flex justify-between items-center z-40">
+          <button onclick="toggleSidebar()" class="lg:hidden text-blue-500">MENU</button>
+          <div class="text-center">
+             <div id="chatName" class="text-white tracking-widest text-sm">THE HUB</div>
+             <div id="onlineStatus" class="text-[7px] text-green-500 hidden animate-pulse">● LIVE</div>
           </div>
-          <a href="/logout" class="opacity-30 hover:opacity-100 p-2">EXIT</a>
+          <a href="/logout" class="opacity-20 hover:opacity-100 transition-all">EXIT</a>
         </div>
         
-        <div id="chatBox" class="flex-1 p-4 overflow-y-auto flex flex-col gap-4 pb-24"></div>
+        <div id="chatBox" class="flex-1 p-6 overflow-y-auto flex flex-col gap-6 pb-32"></div>
 
-        <div id="inputBar" class="hidden absolute bottom-0 left-0 right-0 p-4 bg-[#0b0f1a]/95 border-t border-zinc-900 z-50 lg:static">
-          <div class="flex items-center gap-2 max-w-5xl mx-auto">
-            <label class="bg-zinc-800 h-10 w-10 flex items-center justify-center rounded-xl cursor-pointer shrink-0">
+        <div id="inputBar" class="hidden absolute bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-3xl z-50">
+          <div class="glass border border-white/10 p-3 rounded-[2.5rem] flex items-center gap-3 shadow-2xl">
+            <label class="bg-white/5 h-12 w-12 flex items-center justify-center rounded-full cursor-pointer hover:bg-white/10 transition-all shrink-0">
               <input type="file" id="fileInput" class="hidden" onchange="document.getElementById('prev').classList.remove('hidden')">
-              <span class="text-xl text-blue-500">+</span>
+              <span class="text-2xl text-blue-500">+</span>
             </label>
-            <input id="msgInput" class="flex-1 bg-black h-10 px-4 rounded-xl outline-none border border-zinc-800 focus:border-blue-600 shadow-inner" placeholder="MESSAGE...">
-            <button onclick="sendChat()" id="sendBtn" class="bg-blue-600 h-10 px-5 rounded-xl text-white shadow-lg active:scale-95">SEND</button>
+            <input id="msgInput" class="flex-1 bg-transparent h-12 px-2 outline-none text-white placeholder-zinc-700" placeholder="TYPE MESSAGE...">
+            <button onclick="sendChat()" id="sendBtn" class="bg-blue-600 h-12 px-8 rounded-full text-white shadow-xl shadow-blue-600/20 active:scale-90 transition-all">SEND</button>
           </div>
-          <div id="prev" class="hidden text-blue-500 mt-2 text-[8px] text-center animate-pulse italic">MEDIA READY...</div>
+          <div id="prev" class="hidden text-blue-500 text-center mt-2 text-[8px] tracking-[0.2em]">FILE ATTACHED</div>
         </div>
       </div>
     </div>
@@ -194,43 +190,43 @@ function renderMainApp(user) {
         const res = await fetch('/api/data');
         if(!res.ok) return;
         const db = await res.json();
-        
-        // Render My Profile Name
         if(db.users["${user}"].name) document.getElementById('myProfileName').innerText = db.users["${user}"].name;
 
-        // Render User List & Status Online
         const users = Object.keys(db.users || {}).filter(u => u !== "${user}");
         document.getElementById('userList').innerHTML = users.map(u => {
           const isOnline = (Date.now() - db.users[u].lastSeen) < 15000;
           return \`
-          <div onclick="selectUser('\${u}')" class="p-4 mb-1 rounded-2xl cursor-pointer \${selectedUser === u ? 'bg-zinc-800 border-l-4 border-blue-500' : 'hover:bg-zinc-900'}">
+          <div onclick="selectUser('\${u}')" class="p-5 rounded-[2rem] cursor-pointer transition-all \${selectedUser === u ? 'bg-blue-600/10 border border-blue-500/30 text-white' : 'hover:bg-white/5'}">
             <div class="flex justify-between items-center">
-               <span class="truncate">\${db.users[u].name || u}</span>
-               \${isOnline ? '<span class="w-1.5 h-1.5 bg-green-500 rounded-full shadow-[0_0_5px_green]"></span>' : ''}
+               <span class="text-sm">\${db.users[u].name || u}</span>
+               \${isOnline ? '<div class="w-1.5 h-1.5 bg-green-500 rounded-full shadow-[0_0_8px_green]"></div>' : ''}
             </div>
-            <div class="text-[6px] opacity-40 lowercase mt-1">\${db.users[u].bio || '...'}</div>
+            <div class="text-[8px] opacity-30 mt-1 font-medium">\${db.users[u].bio || '...'}</div>
           </div>\`;
         }).join('');
 
         if(selectedUser) {
           const statusEl = document.getElementById('onlineStatus');
           const isOnline = (Date.now() - db.users[selectedUser].lastSeen) < 15000;
-          statusEl.innerText = isOnline ? "ONLINE" : "OFFLINE";
-          statusEl.classList.toggle('text-green-500', isOnline);
-          statusEl.classList.toggle('text-zinc-600', !isOnline);
+          statusEl.innerText = isOnline ? "● LIVE" : "○ OFFLINE";
+          statusEl.className = \`text-[7px] \${isOnline ? 'text-green-500 animate-pulse' : 'text-zinc-600'} italic\`;
           statusEl.classList.remove('hidden');
 
           const cId = ["${user}", selectedUser].sort().join("_");
           const msgs = (db.privateChats && db.privateChats[cId]) || [];
-          document.getElementById('chatBox').innerHTML = msgs.filter(m => !m.deletedBy.includes("${user}")).map(m => \`
-            <div class="flex flex-col \${m.from === "${user}" ? 'items-end' : 'items-start'} msg-item relative">
-              <div class="max-w-[85%] p-3 rounded-2xl shadow-lg \${m.from === "${user}" ? 'bg-blue-600 rounded-tr-none' : 'bg-zinc-800 rounded-tl-none'}">
-                \${m.file ? \`<img src="\${m.file}" class="rounded-lg mb-2 max-w-full block" />\` : ''}
-                <div class="text-[11px] text-white not-italic tracking-normal break-words">\${m.text}</div>
-                <div class="flex items-center gap-3 mt-2 opacity-40 text-[7px]">
-                  <span>\${m.time} \${m.edited ? '(EDITED)' : ''}</span>
-                  \${m.from === "${user}" && !m.isDeleted ? \`<button onclick="editMsg('\${m.id}', '\${m.text}')" class="text-yellow-400">EDIT</button>\` : ''}
-                  <button onclick="msgMenu('\${m.id}', \${m.from === "${user}"})" class="text-white">...</button>
+          const chatBox = document.getElementById('chatBox');
+          
+          chatBox.innerHTML = msgs.filter(m => !m.deletedBy.includes("${user}")).map(m => \`
+            <div class="flex flex-col \${m.from === "${user}" ? 'items-end' : 'items-start'} msg-anim">
+              <div class="max-w-[80%] p-4 rounded-[1.8rem] shadow-xl \${m.from === "${user}" ? 'bg-blue-600 text-white rounded-br-none shadow-blue-900/20' : 'bg-zinc-900 text-zinc-300 rounded-bl-none'}">
+                \${m.file ? \`<img src="\${m.file}" class="rounded-2xl mb-3 max-w-full border border-white/5" />\` : ''}
+                <div class="text-[12px] leading-relaxed font-medium not-italic tracking-normal break-words">\${m.text}</div>
+                <div class="flex items-center gap-4 mt-3 opacity-30 text-[7px] font-bold">
+                  <span>\${m.time} \${m.edited ? 'ED' : ''}</span>
+                  <div class="flex gap-2">
+                    \${m.from === "${user}" && !m.isDeleted ? \`<button onclick="editMsg('\${m.id}', '\${m.text}')">EDIT</button>\` : ''}
+                    <button onclick="msgMenu('\${m.id}', \${m.from === "${user}"})">VOID</button>
+                  </div>
                 </div>
               </div>
             </div>\`).join('');
@@ -238,7 +234,7 @@ function renderMainApp(user) {
       }
 
       function msgMenu(id, isMine) {
-        const act = prompt("1: Hapus untuk saya\\n" + (isMine ? "2: Hapus untuk semua" : ""));
+        const act = prompt("1: FOR ME\\n" + (isMine ? "2: FOR ALL" : ""));
         if(act === "1") sendAction('delete_for_me', {msgId: id});
         if(act === "2" && isMine) sendAction('delete_for_all', {msgId: id});
       }
@@ -250,8 +246,8 @@ function renderMainApp(user) {
       }
 
       function editProfile() {
-        const n = prompt("Ganti Nama:", document.getElementById('myProfileName').innerText);
-        const b = prompt("Ganti Bio:", "Available");
+        const n = prompt("NAME:", document.getElementById('myProfileName').innerText);
+        const b = prompt("BIO:", "READY");
         if(n) sendAction('update_profile', {display_name: n, bio: b});
       }
 
@@ -261,26 +257,27 @@ function renderMainApp(user) {
         document.getElementById('inputBar').classList.remove('hidden'); 
         update(); 
         if(window.innerWidth < 1024) toggleSidebar(); 
+        setTimeout(() => { const b = document.getElementById('chatBox'); b.scrollTop = b.scrollHeight; }, 300);
       }
 
       async function sendChat() {
         const i = document.getElementById('msgInput'), f = document.getElementById('fileInput'), btn = document.getElementById('sendBtn');
         if(!i.value && !f.files[0]) return;
-        btn.disabled = true;
+        btn.innerText = "...";
         const fd = new FormData(); fd.append('action', 'chat'); fd.append('to', selectedUser); fd.append('message', i.value);
         if(f.files[0]) fd.append('file', f.files[0]);
         i.value = ""; f.value = ""; document.getElementById('prev').classList.add('hidden');
         await fetch('/', { method: 'POST', body: fd });
-        btn.disabled = false; update();
+        btn.innerText = "SEND"; update();
+        setTimeout(() => { const b = document.getElementById('chatBox'); b.scrollTop = b.scrollHeight; }, 300);
       }
 
       function editMsg(id, old) {
-        const n = prompt("Edit:", old);
+        const n = prompt("NEW TEXT:", old);
         if(n !== null && n !== old) sendAction('edit', {msgId: id, message: n});
       }
 
-      setInterval(update, 5000); 
-      update();
+      setInterval(update, 5000); update();
     </script>
   </body></html>`;
-            }
+}
