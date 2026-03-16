@@ -45,29 +45,58 @@ export default {
       const action = formData.get("action");
       let db = await getSafeDB(token);
 
-      if (action === "register" || action === "login") {
-        const user = (formData.get("username") || "").trim();
-        if (!user) return new Response("Input tidak valid", { status: 400 });
+// Ganti bagian if (action === "register" || action === "login") dengan ini:
 
-        if (action === "register") {
-          if (db.users[user]) return new Response("Username sudah dipakai", { status: 400 });
-          db.users[user] = { name: user, bio: "Available", avatar: "", lastSeen: Date.now() };
-        } else {
-          if (!db.users[user]) return new Response("Akun tidak ada", { status: 400 });
-        }
-        
-        await updateDriveFile(token, JSON.stringify(db, null, 2));
-        return new Response("OK", { status: 302, headers: { "Location": "/", "Set-Cookie": `user_session=${user}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400` } });
-      }
+if (action === "register" || action === "login") {
+  const user = (formData.get("username") || "").trim();
+  if (!user) return new Response("Username tidak boleh kosong", { status: 400 });
 
-      if (action === "updateProfile" && username) {
-        if (db.users[username]) {
-          db.users[username].bio = formData.get("bio") || "";
-          db.users[username].avatar = formData.get("avatar") || "";
-          await updateDriveFile(token, JSON.stringify(db, null, 2));
-          return new Response(JSON.stringify({ status: "success" }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-        }
-      }
+  let db;
+  try {
+    const raw = await getDriveFile(token);
+    db = JSON.parse(raw || '{"users":{}, "privateChats":{}}');
+  } catch (e) {
+    // Jika file rusak/kosong, paksa buat struktur baru
+    db = { users: {}, privateChats: {} };
+  }
+
+  // Pastikan properti 'users' ada
+  if (!db.users) db.users = {};
+
+  if (action === "register") {
+    if (db.users[user]) return new Response("User sudah terdaftar", { status: 400 });
+    
+    // Simpan data user baru
+    db.users[user] = { 
+      name: user, 
+      bio: "Available", 
+      avatar: "", 
+      lastSeen: Date.now() 
+    };
+    
+    // Kirim ke Google Drive
+    const updateRes = await updateDriveFile(token, JSON.stringify(db, null, 2));
+    
+    // Cek apakah Google Drive menerima update tersebut
+    if (!updateRes.ok) {
+       const errText = await updateRes.text();
+       return new Response("Gagal simpan ke Drive: " + errText, { status: 500 });
+    }
+  } else {
+    if (!db.users[user]) return new Response("Username tidak ditemukan", { status: 400 });
+  }
+  
+  // Set Cookie dan Redirect
+  return new Response("OK", { 
+    status: 302, 
+    headers: { 
+      "Location": "/", 
+      "Set-Cookie": `user_session=${user}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+      "Content-Type": "text/plain; charset=utf-8"
+    } 
+  });
+  
+    }
 
       if (action === "chat" && username) {
         const to = formData.get("to");
