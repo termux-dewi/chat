@@ -1,5 +1,5 @@
 const CONFIG = {
-  driveFileId: "1UCY2HKEGuT8ntU-4w0m_ZhCQTeWJPs80",
+  driveFileId: "17ECgOYPEQ1bNdW8Gh_2D7rwSyHtrTpwg",
   // Gunakan folder ID khusus untuk menyimpan media agar tidak berantakan dengan file database
   mediaFolderId: "1hdon9vKWqoeQUZL5K2t9gFfxNUJAjNER", 
   clientEmail: "datasabe@database-490402.iam.gserviceaccount.com",
