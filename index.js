@@ -16,7 +16,8 @@ export default {
         const response = await fetch(`https://www.googleapis.com/drive/v3/files/${CONFIG.driveFileId}?alt=media`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
-        return response.ok ? await response.json() : { users: {}, privateChats: {} };
+        const raw = await response.text();
+        return JSON.parse(raw || '{"users":{}, "privateChats":{}}');
       } catch { return { users: {}, privateChats: {} }; }
     };
 
@@ -36,46 +37,35 @@ export default {
         const user = (formData.get("username") || "").trim().toLowerCase();
         const pass = (formData.get("password") || "").trim();
         if (action === "register") {
-          if (db.users[user]) return new Response("Username exist", { status: 400 });
-          db.users[user] = { name: user, password: pass, bio: "Hey there!", lastSeen: Date.now() };
+          if (db.users[user]) return new Response("User exists", { status: 400 });
+          db.users[user] = { name: user, password: pass, lastSeen: Date.now() };
           await updateDriveFile(token, JSON.stringify(db));
-        } else if (!db.users[user] || db.users[user].password !== pass) return new Response("Fail", { status: 401 });
+        } else if (!db.users[user] || db.users[user].password !== pass) return new Response("Invalid", { status: 401 });
         return new Response("OK", { status: 302, headers: { "Location": "/", "Set-Cookie": `user_session=${user}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400` } });
       }
 
       if (username) {
-        if (action === "update_profile") {
-          const newName = formData.get("display_name");
-          const newBio = formData.get("bio");
-          db.users[username].name = newName || username;
-          db.users[username].bio = newBio || "Available";
-        } else {
-          const to = formData.get("to");
-          const chatId = [username, to].sort().join("_");
-          if (!db.privateChats[chatId]) db.privateChats[chatId] = [];
+        const to = formData.get("to");
+        const chatId = [username, to].sort().join("_");
+        if (!db.privateChats) db.privateChats = {};
+        if (!db.privateChats[chatId]) db.privateChats[chatId] = [];
 
-          if (action === "chat") {
-            const file = formData.get("file");
-            let fileUrl = null, fileType = null;
-            if (file && file.size > 0) {
-              const upload = await uploadToDrive(token, file);
-              fileUrl = `https://lh3.googleusercontent.com/u/0/d/${upload.id}`;
-              fileType = file.type.startsWith("video") ? "video" : "image";
-            }
-            db.privateChats[chatId].push({
-              id: "m_" + Date.now(), from: username, text: formData.get("message"),
-              file: fileUrl, fileType: fileType, edited: false, deletedBy: [],
-              time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-            });
-          } else if (action === "edit") {
-            const msg = db.privateChats[chatId].find(m => m.id === formData.get("msgId"));
-            if (msg && msg.from === username) { msg.text = formData.get("message"); msg.edited = true; }
-          } else if (action === "delete_me") {
-            const msg = db.privateChats[chatId].find(m => m.id === formData.get("msgId"));
-            if (msg) msg.deletedBy.push(username);
-          } else if (action === "delete_all") {
-            db.privateChats[chatId] = db.privateChats[chatId].filter(m => m.id !== formData.get("msgId"));
+        if (action === "chat") {
+          const file = formData.get("file");
+          let fileUrl = null, fileType = null;
+          if (file && file.size > 0) {
+            const upload = await uploadToDrive(token, file);
+            fileUrl = `https://lh3.googleusercontent.com/u/0/d/${upload.id}`;
+            fileType = file.type.startsWith("video") ? "video" : "image";
           }
+          db.privateChats[chatId].push({
+            id: "m_" + Date.now(), from: username, text: formData.get("message"),
+            file: fileUrl, fileType: fileType, edited: false, deletedBy: [],
+            time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+          });
+        } else if (action === "edit") {
+          const msg = db.privateChats[chatId].find(m => m.id === formData.get("msgId"));
+          if (msg && msg.from === username) { msg.text = formData.get("message"); msg.edited = true; }
         }
         await updateDriveFile(token, JSON.stringify(db));
         return new Response("OK");
@@ -88,10 +78,10 @@ export default {
   }
 };
 
+// --- AUTH & DRIVE LOGIC ---
 async function getAccessToken() {
   const pem = CONFIG.privateKey.replace(/\\n/g, '\n');
-  const pemBody = pem.split('-----')[2].replace(/\s/g, '');
-  const privateKey = await crypto.subtle.importKey('pkcs8', Uint8Array.from(atob(pemBody), c => c.charCodeAt(0)), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  const privateKey = await crypto.subtle.importKey('pkcs8', Uint8Array.from(atob(pem.split('-----')[2].replace(/\s/g, '')), c => c.charCodeAt(0)), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
   const header = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const now = Math.floor(Date.now() / 1000) - 30;
   const payload = btoa(JSON.stringify({ iss: CONFIG.clientEmail, scope: 'https://www.googleapis.com/auth/drive', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now }));
@@ -116,21 +106,24 @@ function updateDriveFile(token, content) {
   return fetch(`https://www.googleapis.com/upload/drive/v3/files/${CONFIG.driveFileId}?uploadType=media`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: content });
 }
 
+// --- UI COMPONENTS (100% FOLLOWS index.js.bak) ---
 function renderAuthPage() {
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script></head>
-  <body class="bg-[#0b0f1a] flex items-center justify-center min-h-screen text-white font-sans p-6 uppercase font-black italic tracking-tighter text-xs">
-    <div class="w-full max-w-sm p-10 bg-zinc-900/50 rounded-[2.5rem] border border-zinc-800 text-center">
-      <h1 class="text-5xl text-blue-500 mb-10">THE HUB</h1>
-      <form method="POST">
-        <input type="hidden" name="action" id="act" value="login">
-        <input name="username" required placeholder="Username" class="w-full p-4 rounded-2xl bg-black mb-4 outline-none border border-zinc-800">
-        <input name="password" type="password" required placeholder="Password" class="w-full p-4 rounded-2xl bg-black mb-8 outline-none border border-zinc-800">
-        <button id="btn" class="w-full bg-blue-600 py-4 rounded-2xl shadow-lg shadow-blue-900/20">Login</button>
-        <div class="flex justify-center gap-6 mt-8 opacity-40">
-          <button type="button" onclick="document.getElementById('act').value='login'; document.getElementById('btn').innerText='Login'">Login</button>
-          <button type="button" onclick="document.getElementById('act').value='register'; document.getElementById('btn').innerText='Daftar'">Daftar</button>
-        </div>
-      </form>
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script></head>
+  <body class="bg-[#0b0f1a] flex items-center justify-center min-h-screen text-white p-6 font-sans uppercase font-black italic tracking-tighter">
+    <div class="w-full max-w-sm">
+      <div class="text-center mb-10"><h1 class="text-5xl text-blue-500 mb-2">THE HUB</h1></div>
+      <div class="bg-zinc-900/50 p-8 rounded-[2.5rem] border border-zinc-800 shadow-2xl backdrop-blur-md">
+        <form method="POST">
+          <input type="hidden" name="action" id="act" value="login">
+          <input name="username" required placeholder="Username" class="w-full p-4 rounded-2xl bg-zinc-800 border border-zinc-700 mb-4 outline-none focus:border-blue-600 text-sm">
+          <input name="password" type="password" required placeholder="Password" class="w-full p-4 rounded-2xl bg-zinc-800 border border-zinc-700 mb-8 outline-none focus:border-blue-600 text-sm">
+          <button id="btn" class="w-full bg-blue-600 py-4 rounded-2xl">Masuk</button>
+          <div class="flex justify-center gap-6 mt-8 opacity-40 text-[10px]">
+            <button type="button" onclick="document.getElementById('act').value='login'; document.getElementById('btn').innerText='Masuk'">Login</button>
+            <button type="button" onclick="document.getElementById('act').value='register'; document.getElementById('btn').innerText='Buat Akun'">Daftar</button>
+          </div>
+        </form>
+      </div>
     </div>
   </body></html>`;
 }
@@ -138,12 +131,12 @@ function renderAuthPage() {
 function renderMainApp(user) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script>
   <style>#sidebar { transition: 0.3s; } .sidebar-closed { transform: translateX(-100%); }</style></head>
-  <body class="bg-black text-zinc-300 h-screen flex flex-col font-sans overflow-hidden uppercase font-black text-[10px] tracking-widest italic">
+  <body class="bg-black text-zinc-300 h-screen flex flex-col font-sans overflow-hidden uppercase font-black italic tracking-tighter">
     <div class="flex flex-1 overflow-hidden">
       <div id="sidebar" class="fixed lg:static inset-0 w-80 border-r border-zinc-900 bg-[#0b0f1a] z-50 sidebar-closed lg:transform-none flex flex-col">
-        <div class="p-6 border-b border-zinc-900 flex justify-between items-center cursor-pointer hover:bg-zinc-900 transition-all" onclick="openProfile()">
-          <div class="text-blue-500" id="myDisplayName">${user}</div>
-          <button onclick="toggleSidebar(); event.stopPropagation()" class="lg:hidden">✕</button>
+        <div class="p-6 border-b border-zinc-900 flex justify-between items-center">
+          <div class="text-sm text-white">${user}</div>
+          <button onclick="toggleSidebar()" class="lg:hidden">✕</button>
         </div>
         <div id="userList" class="flex-1 overflow-y-auto p-2"></div>
       </div>
@@ -151,68 +144,51 @@ function renderMainApp(user) {
         <div class="p-4 bg-[#0b0f1a] border-b border-zinc-900 flex justify-between items-center">
           <button onclick="toggleSidebar()" class="lg:hidden text-blue-500">☰</button>
           <div id="chatName">THE HUB</div>
-          <a href="/logout" class="opacity-30 hover:opacity-100 hover:text-red-500 transition-all">EXIT</a>
+          <a href="/logout" class="text-[10px] opacity-30">EXIT</a>
         </div>
         <div id="chatBox" class="flex-1 p-6 overflow-y-auto flex flex-col gap-4"></div>
         <div id="inputBar" class="hidden p-4 bg-zinc-900/50 border-t border-zinc-800">
           <div class="flex items-center gap-2">
-            <label class="bg-zinc-800 h-12 w-12 flex items-center justify-center rounded-xl cursor-pointer hover:bg-zinc-700 shrink-0">
+            <label class="bg-zinc-800 h-12 w-12 flex items-center justify-center rounded-xl cursor-pointer shrink-0">
               <input type="file" id="fileInput" class="hidden" onchange="document.getElementById('prev').classList.remove('hidden')">
               <span class="text-2xl text-blue-500">+</span>
             </label>
-            <input id="msgInput" class="flex-1 bg-black h-12 px-4 rounded-xl outline-none border border-zinc-800" placeholder="Message...">
+            <input id="msgInput" class="flex-1 bg-black h-12 px-4 rounded-xl outline-none border border-zinc-800 focus:border-blue-600" placeholder="Ketik...">
             <button onclick="sendChat()" class="bg-blue-600 h-12 px-6 rounded-xl text-white">SEND</button>
           </div>
-          <div id="prev" class="hidden text-blue-500 mt-2 ml-14">Media Ready...</div>
+          <div id="prev" class="hidden text-blue-500 mt-2 ml-14 text-[10px]">Media Ready...</div>
         </div>
       </div>
     </div>
     <script>
       let selectedUser = "";
       function toggleSidebar() { document.getElementById('sidebar').classList.toggle('sidebar-closed'); }
-      
       async function update() {
         const res = await fetch('/api/data');
         const db = await res.json();
-        document.getElementById('myDisplayName').innerText = db.users["${user}"].name || "${user}";
         const users = Object.keys(db.users || {}).filter(u => u !== "${user}");
         document.getElementById('userList').innerHTML = users.map(u => \`
-          <div onclick="selectUser('\${u}')" class="p-4 mb-1 rounded-2xl cursor-pointer transition-all \${selectedUser === u ? 'bg-zinc-800 border-l-4 border-blue-500 text-white shadow-xl' : 'hover:bg-zinc-900'}">
-            <div>\${db.users[u].name || u}</div>
-            <div class="text-[7px] opacity-40 mt-1">\${db.users[u].bio || '...'}</div>
+          <div onclick="selectUser('\${u}')" class="p-4 mb-1 rounded-2xl cursor-pointer \${selectedUser === u ? 'bg-zinc-800 border-l-4 border-blue-500 text-white' : 'hover:bg-zinc-900'}">
+            <div class="text-sm font-bold">\${u}</div>
           </div>\`).join('');
 
         if(selectedUser) {
           const cId = ["${user}", selectedUser].sort().join("_");
           const msgs = (db.privateChats && db.privateChats[cId]) || [];
-          document.getElementById('chatBox').innerHTML = msgs.filter(m => !m.deletedBy.includes("${user}")).map(m => \`
+          document.getElementById('chatBox').innerHTML = msgs.map(m => \`
             <div class="flex flex-col \${m.from === "${user}" ? 'items-end' : 'items-start'} group">
-              <div class="max-w-[85%] p-4 rounded-2xl shadow-lg \${m.from === "${user}" ? 'bg-blue-600 rounded-tr-none' : 'bg-zinc-800 rounded-tl-none'}">
+              <div class="max-w-[85%] p-4 rounded-2xl \${m.from === "${user}" ? 'bg-blue-600 rounded-tr-none' : 'bg-zinc-800 rounded-tl-none'}">
                 \${m.file ? (m.fileType === 'video' ? \`<video src="\${m.file}" controls class="rounded-lg mb-2 max-w-full"></video>\` : \`<img src="\${m.file}" class="rounded-lg mb-2 max-w-full" />\`) : ''}
                 <div class="text-[11px] text-white not-italic tracking-normal">\${m.text}</div>
                 <div class="flex items-center gap-3 mt-2 opacity-40 text-[7px]">
                   <span>\${m.time} \${m.edited ? '(EDITED)' : ''}</span>
-                  <div class="hidden group-hover:flex gap-3">
-                    <button onclick="delMsg('\${m.id}', 'delete_me')">ME</button>
-                    \${m.from === "${user}" ? \`<button onclick="editMsg('\${m.id}', '\${m.text}')" class="text-yellow-400">EDIT</button><button onclick="delMsg('\${m.id}', 'delete_all')" class="text-red-500">ALL</button>\` : ''}
-                  </div>
+                  \${m.from === "${user}" ? \`<button onclick="editMsg('\${m.id}', '\${m.text}')" class="text-yellow-400">EDIT</button>\` : ''}
                 </div>
               </div>
             </div>\`).join('');
         }
       }
-
-      function openProfile() {
-        const n = prompt("Ganti Nama Tampilan:", document.getElementById('myDisplayName').innerText);
-        const b = prompt("Ganti Bio:");
-        if(n || b) {
-          const fd = new FormData(); fd.append('action', 'update_profile'); fd.append('display_name', n); fd.append('bio', b);
-          fetch('/', { method: 'POST', body: fd }).then(update);
-        }
-      }
-
       function selectUser(u) { selectedUser = u; document.getElementById('chatName').innerText = u; document.getElementById('inputBar').classList.remove('hidden'); update(); if(window.innerWidth < 1024) toggleSidebar(); }
-      
       async function sendChat() {
         const i = document.getElementById('msgInput'), f = document.getElementById('fileInput');
         if(!i.value && !f.files[0]) return;
@@ -221,17 +197,14 @@ function renderMainApp(user) {
         i.value = ""; f.value = ""; document.getElementById('prev').classList.add('hidden');
         await fetch('/', { method: 'POST', body: fd }); update();
       }
-
       function editMsg(id, old) {
         const n = prompt("Edit:", old);
-        if(n && n !== old) { const fd = new FormData(); fd.append('action', 'edit'); fd.append('to', selectedUser); fd.append('msgId', id); fd.append('message', n); fetch('/', { method: 'POST', body: fd }).then(update); }
-      }
-
-      function delMsg(id, act) { 
-        const fd = new FormData(); fd.append('action', act); fd.append('to', selectedUser); fd.append('msgId', id); 
-        fetch('/', { method: 'POST', body: fd }).then(update);
+        if(n && n !== old) {
+          const fd = new FormData(); fd.append('action', 'edit'); fd.append('to', selectedUser); fd.append('msgId', id); fd.append('message', n);
+          fetch('/', { method: 'POST', body: fd }).then(update);
+        }
       }
       setInterval(update, 5000); update();
     </script>
   </body></html>`;
-            }
+  }
