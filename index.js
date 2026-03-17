@@ -1,6 +1,6 @@
 const CONFIG = {
-  driveFileId: "1y4HcX-otBQeT5-dTgUcleOB1BAtkVXML",
-  mediaFolderId: "1VgxPBzDVJ_GxPbUXAYLnTSeZbitjYOnY", 
+  // Semua data (User, Chat, dan Media Base64) masuk ke sini
+  driveFileId: "1y4HcX-otBQeT5-dTgUcleOB1BAtkVXML", 
   clientEmail: "dbchat@chat-490410.iam.gserviceaccount.com",
   privateKey: "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDNgJdV7jFyCzHt\nnRLMBKaDNtTXlm9Ab8liUWAf7DFqVOt2bw8+g+ufmLPRrGIpQMlgJmHtE+e9iJJ7\nP0qRHnygmmXjwMK+jVeRk77KJA3aHpM9rGZjltl1TMffGxrWWCcGk+rJ4GWOkvR6\nwnRSmpVjPywRpCcB66LLwTKKSjOySZ6RIOOT4WIWDwM04qk75ueav80WarV+/scx\nh/6GrAJ8HXJijiPhQoFP47nrD8Cb/GQMVoCnIonkDybBATaAemlImSlsfigjMCCO\nj3iU16tMq+AbsFgZ9XefJ0GaIMWjvCnlm4UxZNlTD7qqx9V0vQZzKFnQWXoOsKSD\n48A1QSPvAgMBAAECggEABPRQsbWoY4N5lKzwwxJpoUg1IW1zCS6owEIN+zcKifG6\nK4TJ7Uvo5lQcIbXyN+Rj9nl2auzL7XnZbjc8aPs/LfAK/M6s40MtFUlmlCECZHvQ\nOPBrF4OPgpBzUSGqJ/jAGByA0JUkXaeVVVBS1Zr8dwQS3+oBNr6jkh36RfM8A9RP\neo0cw1P4nv71q1eVp7vfH+6/iN2f7QuyJEdsZhCmjq9+aWxNh/VlVgS0KT+aDDhl\n9MFp/RL+YLstGTeS/NUj2eprjO/+K6SsGlQ7Ln42o3AO3WdmEPuFdub+WcQvbDv9\nfqYDmvJETEMR7A3oeGNxvvS3Q7CGrF7GxsHLB7e7wQKBgQDp+rVMJJqzweC5uDOs\npXH6tJrIK8w3XRIsQCiumad+BgmY0/fDQ0QxmEggxlxJ4XZKSfinssxA+LksdQL5\n1yX4Ug+blTViTDZdol95RQkHvHKrqHJyKM2Ghf17QASn/hrAsZ7SkJDOu6zpZpI+\nk38sC5ZHffZ3SIHCJO4hMzCzJwKBgQDg18hhkieUkndqKtHSklIc4+WXcy4+L5h7\n1ovr4IihFdOCkBeE3lRMklXl83vXUxRUjK0ei9VmxspW6V9rQkLU7HKiCUMVnXts\nPSViB6RUOjy4bQrItze/cyzP80yH3hxFIUWRa2FzLI08/j3uAF1Dp/taMgQBVS25\n8LCiAPfl+QKBgQCIpEo2YnYaHlJgA2viGmia8dgmqDVF68uOHhXkCYXgOiRmpPtf\nhCwSDo2o3k7NMqdDMTnOrcNM+jQh+1+2imf5QestgBDCDCH/wrChAKkKZIpPJztW\n4e9M7Xkf/j354ZK8D77h111J7h5H3AfyFW9CSK4FqFFETgrBV5Hdv6hkJwKBgBS/\n1R4r/rsXSS3jBboJBsrjvSxc1MeoXMoQ4pjB/9ndyccixQjd+6mVV5gBAEy+vgGP\neep3vRne/o1GvCeJ1eEQcQPDFw3HmrxCaFDDo8aiGThr17LuNZbVai1GpqljNfir\nOWBSKIwYcHBQhiaQogq8VdXdB8GXusCOFb7dmAMBAoGBAMi/+6SAbISsMQGjoh1W\nrU0wgC168Ktz0D3E/8JJaVgh9kaFXHhwPz9hb7mzFUtioTaNq/tCFyMcLEEZHnDO\ne9Uym8/pdzzZlrZHj9/RlGe25aMxHOHz/+gNswnruJ0oc9uNQd8wI3c/fuD03umK\n5lykpzsqt9d8bflXTSS5d1CJ\n-----END PRIVATE KEY-----\n"
 };
@@ -11,7 +11,7 @@ export default {
     const cookie = request.headers.get("Cookie") || "";
     const username = (cookie.match(/user_session=([^;]+)/) || [])[1];
 
-    const getSafeDB = async (token) => {
+    const getDB = async (token) => {
       const res = await fetch(`https://www.googleapis.com/drive/v3/files/${CONFIG.driveFileId}?alt=media`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -23,10 +23,10 @@ export default {
 
     if (url.pathname === "/api/data") {
       const token = await getAccessToken();
-      let db = await getSafeDB(token);
+      let db = await getDB(token);
       if (username && db.users[username]) {
         db.users[username].lastSeen = Date.now();
-        await updateDriveFile(token, JSON.stringify(db));
+        await saveDB(token, db);
       }
       return new Response(JSON.stringify(db), { headers: { "Content-Type": "application/json" } });
     }
@@ -35,14 +35,14 @@ export default {
       const token = await getAccessToken();
       const formData = await request.formData();
       const action = formData.get("action");
-      let db = await getSafeDB(token);
+      let db = await getDB(token);
 
       if (action === "login" || action === "register") {
         const user = (formData.get("username") || "").trim().toLowerCase();
         const pass = (formData.get("password") || "").trim();
         if (action === "register") {
           db.users[user] = { name: user, password: pass, lastSeen: Date.now(), bio: "Available", pic: null };
-          await updateDriveFile(token, JSON.stringify(db));
+          await saveDB(token, db);
         }
         return new Response("OK", { status: 302, headers: { "Location": "/", "Set-Cookie": `user_session=${user}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400` } });
       }
@@ -54,33 +54,34 @@ export default {
           if (!db.privateChats[chatId]) db.privateChats[chatId] = [];
           
           const file = formData.get("file");
-          let fileUrl = null, fType = "text";
+          let base64Data = null, fType = "text";
           
           if (file && file.size > 0) {
-            const uploadedId = await uploadToDrive(token, file);
-            if (uploadedId) {
-              fileUrl = `https://www.googleapis.com/drive/v3/files/${uploadedId}?alt=media`;
-              fType = file.type.startsWith("video") ? "video" : "image";
-            }
+            // Mengubah file menjadi Base64 string untuk disimpan di JSON
+            const buffer = await file.arrayBuffer();
+            const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+            base64Data = `data:${file.type};base64,${base64}`;
+            fType = file.type.startsWith("video") ? "video" : "image";
           }
 
           db.privateChats[chatId].push({
             id: "m_" + Date.now(), from: username, text: formData.get("message") || "",
-            file: fileUrl, fileType: fType,
+            file: base64Data, fileType: fType,
             time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
           });
         } 
         else if (action === "update_profile") {
           const pPic = formData.get("profile_pic");
           if (pPic && pPic.size > 0) {
-            const uploadedId = await uploadToDrive(token, pPic);
-            if (uploadedId) db.users[username].pic = `https://www.googleapis.com/drive/v3/files/${uploadedId}?alt=media`;
+            const buffer = await pPic.arrayBuffer();
+            const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+            db.users[username].pic = `data:${pPic.type};base64,${base64}`;
           }
           db.users[username].name = formData.get("display_name") || db.users[username].name;
           db.users[username].bio = formData.get("bio") || db.users[username].bio;
         }
         
-        await updateDriveFile(token, JSON.stringify(db));
+        await saveDB(token, db);
         return new Response("OK");
       }
     }
@@ -90,6 +91,16 @@ export default {
     return new Response(renderMainApp(username), { headers: { "Content-Type": "text/html" } });
   }
 };
+
+// --- DATABASE HANDLER ---
+
+async function saveDB(token, dbContent) {
+  return fetch(`https://www.googleapis.com/upload/drive/v3/files/${CONFIG.driveFileId}?uploadType=media`, { 
+    method: 'PATCH', 
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, 
+    body: JSON.stringify(dbContent) 
+  });
+}
 
 async function getAccessToken() {
   const pem = CONFIG.privateKey.trim().replace(/\\n/g, '\n');
@@ -103,24 +114,8 @@ async function getAccessToken() {
   return (await res.json()).access_token;
 }
 
-async function uploadToDrive(token, file) {
-  try {
-    const meta = { name: `media_${Date.now()}`, parents: [CONFIG.mediaFolderId] };
-    const body = new FormData();
-    body.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
-    body.append('file', file);
-    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body });
-    const data = await res.json();
-    if (data.id) {
-      await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ role: 'reader', type: 'anyone' }) });
-      return data.id;
-    }
-  } catch(e) {} return null;
-}
-
-function updateDriveFile(token, content) {
-  return fetch(`https://www.googleapis.com/upload/drive/v3/files/${CONFIG.driveFileId}?uploadType=media`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: content });
-}
+// --- UI (Glassmorphism & Local Preview) ---
+// Bagian renderAuthPage dan renderMainApp tetap sama namun menangani src media dari base64 string
 
 function renderAuthPage() {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script></head>
@@ -227,11 +222,9 @@ function renderMainApp(user) {
         const container = document.getElementById('previewContainer');
         const box = document.getElementById('mediaPreview');
         const url = URL.createObjectURL(tempFile);
-        
         container.innerHTML = tempFile.type.startsWith('video') 
           ? \`<video src="\${url}" class="h-full w-full object-cover" muted autoplay loop></video>\`
           : \`<img src="\${url}" class="h-full w-full object-cover" />\`;
-        
         box.classList.remove('hidden');
       }
 
@@ -241,14 +234,13 @@ function renderMainApp(user) {
         document.getElementById('mediaPreview').classList.add('hidden');
       }
 
-      const getAv = (u, name) => (u && u.pic && !u.pic.includes('undefined')) ? \`<img src="\${u.pic}" />\` : \`<span>\${name[0]}</span>\`;
+      const getAv = (u, name) => (u && u.pic) ? \`<img src="\${u.pic}" />\` : \`<span>\${name[0]}</span>\`;
 
       async function update() {
         try {
           const res = await fetch('/api/data');
           const db = await res.json();
           const me = db.users["${user}"];
-          
           document.getElementById('myAvatar').innerHTML = getAv(me, "${user}");
           document.getElementById('modalAvatar').innerHTML = getAv(me, "${user}");
           
@@ -280,7 +272,7 @@ function renderMainApp(user) {
                 <div class="avatar-circle w-7 h-7 text-[8px]">\${getAv(db.users[m.from], m.from)}</div>
                 <div class="max-w-[80%] flex flex-col \${m.from === "${user}" ? 'items-end' : 'items-start'}">
                    <div class="p-4 rounded-[1.8rem] shadow-xl \${m.from === "${user}" ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-zinc-900 text-zinc-300 rounded-tl-none'}">
-                      \${(m.file && !m.file.includes('undefined')) ? (m.fileType === 'video' ? \`<video src="\${m.file}" controls class="rounded-2xl max-w-full mb-3"></video>\` : \`<img src="\${m.file}" class="rounded-2xl max-w-full mb-3" />\`) : ''}
+                      \${m.file ? (m.fileType === 'video' ? \`<video src="\${m.file}" controls class="rounded-2xl max-w-full mb-3"></video>\` : \`<img src="\${m.file}" class="rounded-2xl max-w-full mb-3" />\`) : ''}
                       <div class="text-[12px] font-medium break-words tracking-normal not-italic uppercase">\${m.text}</div>
                    </div>
                    <div class="mt-1 px-2 opacity-20 text-[6px] font-bold italic">\${m.time}</div>
@@ -314,10 +306,7 @@ function renderMainApp(user) {
         b.disabled = true; b.innerText = "...";
         const fd = new FormData(); fd.append('action', 'chat'); fd.append('to', selectedUser); fd.append('message', i.value);
         if(tempFile) fd.append('file', tempFile);
-        
-        i.value = ""; 
-        clearMedia(); // Langsung hapus preview setelah klik kirim
-
+        i.value = ""; clearMedia();
         await fetch('/', { method: 'POST', body: fd });
         b.disabled = false; b.innerText = "SEND"; update();
         const box = document.getElementById('chatBox');
