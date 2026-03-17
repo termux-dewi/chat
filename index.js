@@ -57,9 +57,9 @@ export default {
           let fileUrl = null, fType = "text";
           
           if (file && file.size > 0) {
-            const uploadId = await uploadToDrive(token, file);
-            if (uploadId) {
-              fileUrl = `https://www.googleapis.com/drive/v3/files/${uploadId}?alt=media`;
+            const uploadedId = await uploadToDrive(token, file);
+            if (uploadedId) {
+              fileUrl = `https://www.googleapis.com/drive/v3/files/${uploadedId}?alt=media`;
               fType = file.type.startsWith("video") ? "video" : "image";
             }
           }
@@ -73,8 +73,8 @@ export default {
         else if (action === "update_profile") {
           const pPic = formData.get("profile_pic");
           if (pPic && pPic.size > 0) {
-            const uploadId = await uploadToDrive(token, pPic);
-            if (uploadId) db.users[username].pic = `https://www.googleapis.com/drive/v3/files/${uploadId}?alt=media`;
+            const uploadedId = await uploadToDrive(token, pPic);
+            if (uploadedId) db.users[username].pic = `https://www.googleapis.com/drive/v3/files/${uploadedId}?alt=media`;
           }
           db.users[username].name = formData.get("display_name") || db.users[username].name;
           db.users[username].bio = formData.get("bio") || db.users[username].bio;
@@ -109,42 +109,29 @@ async function uploadToDrive(token, file) {
     const body = new FormData();
     body.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
     body.append('file', file);
-    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { 
-      method: 'POST', 
-      headers: { 'Authorization': `Bearer ${token}` }, 
-      body 
-    });
+    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body });
     const data = await res.json();
     if (data.id) {
-      await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, { 
-        method: 'POST', 
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ role: 'reader', type: 'anyone' }) 
-      });
+      await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ role: 'reader', type: 'anyone' }) });
       return data.id;
     }
-  } catch(e) { console.error("Upload Error", e); }
-  return null;
+  } catch(e) {} return null;
 }
 
 function updateDriveFile(token, content) {
-  return fetch(`https://www.googleapis.com/upload/drive/v3/files/${CONFIG.driveFileId}?uploadType=media`, { 
-    method: 'PATCH', 
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, 
-    body: content 
-  });
+  return fetch(`https://www.googleapis.com/upload/drive/v3/files/${CONFIG.driveFileId}?uploadType=media`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: content });
 }
 
 function renderAuthPage() {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script></head>
   <body class="bg-black flex items-center justify-center min-h-screen text-white font-black italic tracking-tighter uppercase">
-    <div class="w-full max-w-sm p-10 bg-zinc-900/50 backdrop-blur-xl rounded-[3rem] border border-white/5 text-center shadow-2xl">
-      <h1 class="text-6xl text-blue-500 mb-10">THE HUB</h1>
+    <div class="w-full max-w-sm p-10 bg-zinc-900/50 backdrop-blur-xl rounded-[3rem] border border-white/5 text-center">
+      <h1 class="text-6xl text-blue-500 mb-10 tracking-tighter">THE HUB</h1>
       <form method="POST" class="space-y-4">
         <input type="hidden" name="action" id="act" value="login">
-        <input name="username" required placeholder="ID" class="w-full p-5 rounded-3xl bg-black border border-white/5 outline-none focus:border-blue-500 transition-all">
-        <input name="password" type="password" required placeholder="PASS" class="w-full p-5 rounded-3xl bg-black border border-white/5 outline-none focus:border-blue-500 transition-all">
-        <button id="btn" class="w-full bg-blue-600 p-5 rounded-3xl active:scale-95 transition-all shadow-lg shadow-blue-600/20">ENTER</button>
+        <input name="username" required placeholder="ID" class="w-full p-5 rounded-3xl bg-black border border-white/5 outline-none focus:border-blue-500">
+        <input name="password" type="password" required placeholder="PASS" class="w-full p-5 rounded-3xl bg-black border border-white/5 outline-none focus:border-blue-500">
+        <button id="btn" class="w-full bg-blue-600 p-5 rounded-3xl active:scale-95 shadow-lg">ENTER</button>
         <div class="flex justify-center gap-8 pt-4 text-[10px] opacity-30">
           <button type="button" onclick="document.getElementById('act').value='login'; document.getElementById('btn').innerText='ENTER'">LOGIN</button>
           <button type="button" onclick="document.getElementById('act').value='register'; document.getElementById('btn').innerText='JOIN'">REGISTER</button>
@@ -170,7 +157,7 @@ function renderMainApp(user) {
     <div class="flex flex-1 overflow-hidden relative">
       <div id="sidebar" class="fixed lg:static inset-y-0 left-0 w-80 glass border-r border-white/5 z-[60] sidebar-closed lg:transform-none flex flex-col shadow-2xl">
         <div class="p-8 border-b border-white/5 flex flex-col items-center gap-4">
-          <div onclick="showProfile()" class="avatar-circle w-24 h-24 text-4xl cursor-pointer hover:scale-105 transition-all border-4 border-blue-600/10" id="myAvatar"></div>
+          <div onclick="showProfile()" class="avatar-circle w-24 h-24 text-4xl cursor-pointer hover:scale-105 border-4 border-blue-600/10" id="myAvatar"></div>
           <div class="text-blue-500 text-lg" id="myProfileName">${user}</div>
           <button onclick="toggleSidebar()" class="lg:hidden text-zinc-600 text-[8px]">CLOSE SIDEBAR</button>
         </div>
@@ -191,49 +178,68 @@ function renderMainApp(user) {
         </div>
         
         <div id="chatBox" class="flex-1 p-6 overflow-y-auto flex flex-col gap-6 pb-32">
-           <div class="h-full flex items-center justify-center opacity-10 italic">SELECT A USER TO START CHATTING</div>
+           <div class="h-full flex items-center justify-center opacity-10">SELECT A CHAT</div>
+        </div>
+
+        <div id="mediaPreview" class="hidden absolute bottom-28 left-1/2 -translate-x-1/2 w-64 glass border border-white/10 p-2 rounded-3xl shadow-2xl z-50">
+           <button onclick="clearMedia()" class="absolute -top-2 -right-2 bg-red-600 text-white w-6 h-6 rounded-full text-[10px]">✕</button>
+           <div id="previewContainer" class="rounded-2xl overflow-hidden aspect-video bg-black flex items-center justify-center"></div>
         </div>
 
         <div id="inputBar" class="hidden absolute bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-3xl z-50">
           <div class="glass border border-white/10 p-3 rounded-[2.5rem] flex items-center gap-3 shadow-2xl">
             <label class="bg-white/5 h-12 w-12 flex items-center justify-center rounded-full cursor-pointer hover:bg-white/10 shrink-0">
-              <input type="file" id="fileInput" class="hidden" onchange="previewFile()" accept="image/*,video/*">
+              <input type="file" id="fileInput" class="hidden" onchange="handleFile(this)" accept="image/*,video/*">
               <span class="text-2xl text-blue-500">+</span>
             </label>
             <input id="msgInput" class="flex-1 bg-transparent h-12 px-2 outline-none text-white placeholder-zinc-800" placeholder="TYPE MESSAGE...">
             <button onclick="sendChat()" id="sendBtn" class="bg-blue-600 h-12 px-8 rounded-full text-white shadow-xl active:scale-90 transition-all">SEND</button>
           </div>
-          <div id="prev" class="hidden text-blue-500 text-center mt-2 text-[8px] tracking-[0.3em] animate-pulse">MEDIA READY</div>
         </div>
       </div>
     </div>
 
-    <div id="profileModal" class="hidden fixed inset-0 z-[100] glass flex flex-col items-center justify-center p-6 transition-all">
-       <div class="w-full max-w-sm bg-zinc-900 p-8 rounded-[3rem] border border-white/10 text-center relative shadow-2xl">
+    <div id="profileModal" class="hidden fixed inset-0 z-[100] glass flex flex-col items-center justify-center p-6">
+       <div class="w-full max-w-sm bg-zinc-900 p-8 rounded-[3rem] border border-white/10 text-center relative">
           <button onclick="hideProfile()" class="absolute top-6 right-6 text-zinc-500">✕</button>
           <h2 class="text-blue-500 mb-8 tracking-widest">PROFILE SETTINGS</h2>
           <div onclick="document.getElementById('pInput').click()" class="avatar-circle w-32 h-32 mx-auto text-5xl cursor-pointer border-4 border-blue-500/20 mb-6" id="modalAvatar"></div>
           <input type="file" id="pInput" class="hidden" onchange="saveProfile()" accept="image/*">
           <div class="space-y-4 text-left">
-            <div>
-              <label class="text-[8px] opacity-30 ml-4">DISPLAY NAME</label>
-              <input id="pName" class="w-full bg-black border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500">
-            </div>
-            <div>
-              <label class="text-[8px] opacity-30 ml-4">BIO / STATUS</label>
-              <input id="pBio" class="w-full bg-black border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500">
-            </div>
+            <div><label class="text-[8px] opacity-30 ml-4">NAME</label><input id="pName" class="w-full bg-black border border-white/5 rounded-2xl p-4 text-white outline-none"></div>
+            <div><label class="text-[8px] opacity-30 ml-4">BIO</label><input id="pBio" class="w-full bg-black border border-white/5 rounded-2xl p-4 text-white outline-none"></div>
           </div>
-          <button onclick="saveProfile()" id="saveBtn" class="w-full bg-blue-600 p-5 rounded-3xl text-white mt-8 font-black shadow-lg">SAVE CHANGES</button>
+          <button onclick="saveProfile()" id="saveBtn" class="w-full bg-blue-600 p-5 rounded-3xl text-white mt-8 font-black">SAVE</button>
        </div>
     </div>
 
     <script>
       let selectedUser = "";
+      let tempFile = null;
+
       const toggleSidebar = () => document.getElementById('sidebar').classList.toggle('sidebar-closed');
       const showProfile = () => document.getElementById('profileModal').classList.remove('hidden');
       const hideProfile = () => document.getElementById('profileModal').classList.add('hidden');
-      const previewFile = () => document.getElementById('prev').classList.remove('hidden');
+
+      function handleFile(input) {
+        if (!input.files[0]) return;
+        tempFile = input.files[0];
+        const container = document.getElementById('previewContainer');
+        const box = document.getElementById('mediaPreview');
+        const url = URL.createObjectURL(tempFile);
+        
+        container.innerHTML = tempFile.type.startsWith('video') 
+          ? \`<video src="\${url}" class="h-full w-full object-cover" muted autoplay loop></video>\`
+          : \`<img src="\${url}" class="h-full w-full object-cover" />\`;
+        
+        box.classList.remove('hidden');
+      }
+
+      function clearMedia() {
+        tempFile = null;
+        document.getElementById('fileInput').value = "";
+        document.getElementById('mediaPreview').classList.add('hidden');
+      }
 
       const getAv = (u, name) => (u && u.pic && !u.pic.includes('undefined')) ? \`<img src="\${u.pic}" />\` : \`<span>\${name[0]}</span>\`;
 
@@ -245,16 +251,12 @@ function renderMainApp(user) {
           
           document.getElementById('myAvatar').innerHTML = getAv(me, "${user}");
           document.getElementById('modalAvatar').innerHTML = getAv(me, "${user}");
-          if(!document.activeElement.id.startsWith('p')) {
-            document.getElementById('pName').value = me.name || "${user}";
-            document.getElementById('pBio').value = me.bio || "AVAILABLE";
-          }
-
+          
           const users = Object.keys(db.users).filter(u => u !== "${user}");
           document.getElementById('userList').innerHTML = users.map(u => {
             const isLive = (Date.now() - db.users[u].lastSeen) < 15000;
             return \`
-            <div onclick="selectUser('\${u}')" class="p-4 rounded-[2.5rem] flex items-center gap-4 transition-all \${selectedUser === u ? 'bg-blue-600/10 border border-blue-500/30 text-white shadow-lg' : 'hover:bg-white/5'}">
+            <div onclick="selectUser('\${u}')" class="p-4 rounded-[2.5rem] flex items-center gap-4 transition-all \${selectedUser === u ? 'bg-blue-600/10 border border-blue-500/30 text-white' : 'hover:bg-white/5'}">
               <div class="avatar-circle">\${getAv(db.users[u], u)}</div>
               <div class="flex-1 min-w-0">
                  <div class="flex justify-between items-center font-black"><span class="truncate">\${db.users[u].name || u}</span>\${isLive ? '<div class="w-2 h-2 bg-green-500 rounded-full shadow-[0_0_8px_green]"></div>' : ''}</div>
@@ -268,7 +270,7 @@ function renderMainApp(user) {
             document.getElementById('chatHeaderInfo').classList.remove('invisible');
             document.getElementById('headerAvatar').innerHTML = getAv(target, selectedUser);
             const isLive = (Date.now() - target.lastSeen) < 15000;
-            document.getElementById('onlineStatus').className = \`text-[7px] \${isLive ? 'text-green-500 animate-pulse font-black' : 'text-zinc-700'} italic\`;
+            document.getElementById('onlineStatus').className = \`text-[7px] \${isLive ? 'text-green-500 animate-pulse' : 'text-zinc-700'} italic\`;
             document.getElementById('onlineStatus').innerText = isLive ? "● LIVE" : "○ OFFLINE";
 
             const cId = ["${user}", selectedUser].sort().join("_");
@@ -277,11 +279,11 @@ function renderMainApp(user) {
               <div class="flex items-start gap-3 \${m.from === "${user}" ? 'flex-row-reverse' : ''}">
                 <div class="avatar-circle w-7 h-7 text-[8px]">\${getAv(db.users[m.from], m.from)}</div>
                 <div class="max-w-[80%] flex flex-col \${m.from === "${user}" ? 'items-end' : 'items-start'}">
-                   <div class="p-4 rounded-[1.8rem] shadow-2xl \${m.from === "${user}" ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-zinc-900 text-zinc-300 rounded-tl-none'}">
-                      \${m.file ? (m.fileType === 'video' ? \`<video src="\${m.file}" controls class="rounded-2xl max-w-full mb-3 shadow-inner"></video>\` : \`<img src="\${m.file}" class="rounded-2xl max-w-full mb-3 shadow-inner" />\`) : ''}
-                      <div class="text-[12px] font-medium break-words tracking-normal not-italic">\${m.text}</div>
+                   <div class="p-4 rounded-[1.8rem] shadow-xl \${m.from === "${user}" ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-zinc-900 text-zinc-300 rounded-tl-none'}">
+                      \${(m.file && !m.file.includes('undefined')) ? (m.fileType === 'video' ? \`<video src="\${m.file}" controls class="rounded-2xl max-w-full mb-3"></video>\` : \`<img src="\${m.file}" class="rounded-2xl max-w-full mb-3" />\`) : ''}
+                      <div class="text-[12px] font-medium break-words tracking-normal not-italic uppercase">\${m.text}</div>
                    </div>
-                   <div class="mt-1 px-2 opacity-20 text-[6px] font-bold">\${m.time}</div>
+                   <div class="mt-1 px-2 opacity-20 text-[6px] font-bold italic">\${m.time}</div>
                 </div>
               </div>\`).join('');
           }
@@ -289,35 +291,40 @@ function renderMainApp(user) {
       }
 
       async function saveProfile() {
-        const btn = document.getElementById('saveBtn'); btn.innerText = "SAVING...";
+        const btn = document.getElementById('saveBtn'); btn.innerText = "...";
         const fd = new FormData(); fd.append('action', 'update_profile');
         fd.append('display_name', document.getElementById('pName').value);
         fd.append('bio', document.getElementById('pBio').value);
         if(document.getElementById('pInput').files[0]) fd.append('profile_pic', document.getElementById('pInput').files[0]);
         await fetch('/', { method: 'POST', body: fd }); 
-        btn.innerText = "SAVE CHANGES"; hideProfile(); update();
+        btn.innerText = "SAVE"; hideProfile(); update();
       }
 
       function selectUser(u) { 
         selectedUser = u; document.getElementById('chatName').innerText = u; 
         document.getElementById('inputBar').classList.remove('hidden'); 
         update(); if(window.innerWidth < 1024) toggleSidebar(); 
-        setTimeout(() => { const b = document.getElementById('chatBox'); b.scrollTop = b.scrollHeight; }, 300);
+        const box = document.getElementById('chatBox');
+        setTimeout(() => box.scrollTop = box.scrollHeight, 300);
       }
 
       async function sendChat() {
-        const i = document.getElementById('msgInput'), f = document.getElementById('fileInput'), b = document.getElementById('sendBtn');
-        if(!i.value && !f.files[0]) return;
-        b.disabled = true; b.innerText = "...";
+        const i = document.getElementById('msgInput'), b = document.getElementById('sendBtn');
+        if(!i.value && !tempFile) return;
+        b.disabled = true; b.innerText = "WAIT";
         const fd = new FormData(); fd.append('action', 'chat'); fd.append('to', selectedUser); fd.append('message', i.value);
-        if(f.files[0]) fd.append('file', f.files[0]);
-        i.value = ""; f.value = ""; document.getElementById('prev').classList.add('hidden');
+        if(tempFile) fd.append('file', tempFile);
+        
+        i.value = ""; 
+        clearMedia(); // Sembunyikan preview segera setelah klik kirim
+
         await fetch('/', { method: 'POST', body: fd });
         b.disabled = false; b.innerText = "SEND"; update();
-        setTimeout(() => { const box = document.getElementById('chatBox'); box.scrollTop = box.scrollHeight; }, 300);
+        const box = document.getElementById('chatBox');
+        setTimeout(() => box.scrollTop = box.scrollHeight, 300);
       }
 
       setInterval(update, 5000); update();
     </script>
   </body></html>`;
-            }
+}
