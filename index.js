@@ -8,43 +8,34 @@ const CONFIG = {
 export default {
   async fetch(request) {
     const url = new URL(request.url);
-    const cookieHeader = request.headers.get("Cookie") || "";
-    const username = (cookieHeader.match(/(?:^|; )user_session=([^;]*)/) || [])[1];
+    const cookie = request.headers.get("Cookie") || "";
+    const user = (cookie.match(/(?:^|; )user_session=([^;]*)/) || [])[1];
     const token = await getAccessToken();
 
-    // 1. AUTH HANDLER
+    // 1. LOGIN / REGISTER
     if (request.method === "POST" && (url.pathname === "/login" || url.pathname === "/register")) {
       const fd = await request.formData();
-      const user = (fd.get("username") || "").trim().toLowerCase();
-      const pass = (fd.get("password") || "").trim();
+      const u = (fd.get("username") || "").trim().toLowerCase();
+      const p = (fd.get("password") || "").trim();
       let db = await getDB(token);
-
       if (url.pathname === "/login") {
-        if (db.users[user] && db.users[user].password === pass) {
-          return new Response("OK", { headers: { "Set-Cookie": `user_session=${user}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax` } });
+        if (db.users[u] && db.users[u].password === p) {
+          return new Response("OK", { headers: { "Set-Cookie": `user_session=${u}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax` } });
         }
-        return new Response("Login Gagal", { status: 401 });
+        return new Response("Salah", { status: 401 });
       }
-      if (url.pathname === "/register") {
-        if (db.users[user]) return new Response("User Exist", { status: 400 });
-        db.users[user] = { name: user, password: pass, lastSeen: Date.now(), bio: "Available", pic: null };
-        await saveDB(token, db);
-        return new Response("OK", { headers: { "Set-Cookie": `user_session=${user}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax` } });
-      }
+      if (!u || !p) return new Response("Kosong", { status: 400 });
+      db.users[u] = { name: u, password: p, lastSeen: Date.now(), bio: "Available", pic: null };
+      await saveDB(token, db);
+      return new Response("OK", { headers: { "Set-Cookie": `user_session=${u}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax` } });
     }
 
-    // 2. PROTECT API
-    if (url.pathname.startsWith("/api/")) {
-      if (!username) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
-    }
+    if (!user) return new Response(renderAuth(), { headers: { "Content-Type": "text/html" } });
 
-    // 3. MAIN PAGE OR LOGIN PAGE
-    if (!username) return new Response(renderAuthPage(), { headers: { "Content-Type": "text/html" } });
-
-    // 4. API ROUTES
+    // 2. DATA API
     if (url.pathname === "/api/data") {
       let db = await getDB(token);
-      if (db.users[username]) { db.users[username].lastSeen = Date.now(); await saveDB(token, db); }
+      if (db.users[user]) { db.users[user].lastSeen = Date.now(); await saveDB(token, db); }
       return new Response(JSON.stringify(db), { headers: { "Content-Type": "application/json" } });
     }
 
@@ -54,7 +45,7 @@ export default {
       return new Response(res.body, { headers: { "Content-Type": res.headers.get("Content-Type") || "application/octet-stream" } });
     }
 
-    // 5. POST ACTIONS
+    // 3. ACTION POST (CHAT / PROFILE)
     if (request.method === "POST") {
       const fd = await request.formData();
       const action = fd.get("action");
@@ -64,64 +55,56 @@ export default {
         const file = fd.get("file");
         let mediaId = null;
         if (file && file.size > 0) mediaId = await uploadToDrive(token, file);
+
         const to = fd.get("to");
-        const chatId = [username, to].sort().join("_");
+        const chatId = [user, to].sort().join("_");
         if (!db.privateChats[chatId]) db.privateChats[chatId] = [];
         db.privateChats[chatId].push({
-          id: "m_" + Date.now(), from: username, text: fd.get("message") || "",
-          fileId: mediaId, fileType: action === "vn" ? "audio" : (file ? file.type.split('/')[0] : "text"),
+          id: "m_" + Date.now(), from: user, text: fd.get("message") || "",
+          fileId: mediaId, fileType: action === "vn" ? "audio" : (file && file.type.startsWith("image") ? "image" : (file ? "video" : "text")),
           time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
         });
-      } else if (action === "delete_msg") {
-        const cId = fd.get("chatId"), mId = fd.get("msgId"), mode = fd.get("mode");
-        if(db.privateChats[cId]) {
-          if(mode === 'everyone') db.privateChats[cId] = db.privateChats[cId].map(m => m.id === mId ? { ...m, text: "🚫 Pesan dihapus", fileId: null, deleted: true } : m);
-          else db.privateChats[cId] = db.privateChats[cId].filter(m => m.id !== mId);
-        }
       } else if (action === "update_profile") {
         const file = fd.get("file");
-        if (file && file.size > 0) db.users[username].pic = await uploadToDrive(token, file);
-        db.users[username].name = fd.get("name") || db.users[username].name;
+        if (file && file.size > 0) {
+          const newPicId = await uploadToDrive(token, file);
+          db.users[user].pic = newPicId;
+        }
+        db.users[user].name = fd.get("name") || db.users[user].name;
       }
+      
       await saveDB(token, db);
       return new Response("OK");
     }
 
     if (url.pathname === "/logout") return new Response("OK", { headers: { "Set-Cookie": "user_session=; Path=/; Max-Age=0", "Location": "/" }, status: 302 });
 
-    return new Response(renderMainApp(username), { headers: { "Content-Type": "text/html" } });
+    return new Response(renderMain(user), { headers: { "Content-Type": "text/html" } });
   }
 };
 
-// --- DATABASE UTILS ---
+// --- DRIVE FUNCTIONS ---
 async function getDB(token) {
   try {
     const r = await fetch(`https://www.googleapis.com/drive/v3/files/${CONFIG.driveFileId}?alt=media`, { headers: { 'Authorization': `Bearer ${token}` } });
-    const text = await r.text();
-    const data = JSON.parse(text);
-    // Pastikan struktur ada
-    if (!data.users) data.users = {};
-    if (!data.privateChats) data.privateChats = {};
-    return data;
-  } catch (e) {
-    // Jika file kosong atau error, buat baru
-    return { users: {}, privateChats: {} };
-  }
+    return await r.json();
+  } catch (e) { return { users: {}, privateChats: {} }; }
 }
 async function saveDB(token, db) {
-  await fetch(`https://www.googleapis.com/upload/drive/v3/files/${CONFIG.driveFileId}?uploadType=media`, { 
-    method: 'PATCH', 
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, 
-    body: JSON.stringify(db) 
-  });
+  await fetch(`https://www.googleapis.com/upload/drive/v3/files/${CONFIG.driveFileId}?uploadType=media`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(db) });
 }
 async function uploadToDrive(token, file) {
-  const meta = { name: `${Date.now()}_${file.name}`, parents: [CONFIG.folderId] };
-  const fd = new FormData();
-  fd.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
-  fd.append('file', file);
-  const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: fd });
-  const d = await r.json(); return d.id;
+  const metadata = { name: `${Date.now()}_${file.name}`, parents: [CONFIG.folderId] };
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', file);
+  const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', { 
+    method: 'POST', 
+    headers: { 'Authorization': `Bearer ${token}` }, 
+    body: form 
+  });
+  const res = await r.json();
+  return res.id;
 }
 async function getAccessToken() {
   const pem = CONFIG.privateKey.trim().replace(/\\n/g, '\n');
@@ -135,60 +118,56 @@ async function getAccessToken() {
   return (await r.json()).access_token;
 }
 
-// --- VIEWS ---
-function renderAuthPage() {
+// --- HTML VIEWS ---
+function renderAuth() {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script></head>
   <body class="bg-[#0b141a] text-white flex items-center justify-center min-h-screen">
-    <div class="w-full max-w-xs text-center p-8 bg-[#202c33] rounded-3xl shadow-2xl">
+    <div class="w-full max-w-xs p-8 bg-[#202c33] rounded-3xl text-center">
       <h1 class="text-3xl font-bold text-emerald-500 mb-8">WhatsApp</h1>
-      <div class="space-y-4">
-        <input id="u" placeholder="Username" class="w-full p-4 rounded-xl bg-[#111b21] outline-none border border-white/5">
-        <input id="p" type="password" placeholder="Password" class="w-full p-4 rounded-xl bg-[#111b21] outline-none border border-white/5">
-        <div id="err" class="text-red-400 text-xs hidden"></div>
-        <button onclick="auth('/login')" class="w-full bg-emerald-600 p-4 rounded-xl font-bold">LOGIN</button>
-        <button onclick="auth('/register')" class="w-full bg-[#2a3942] p-4 rounded-xl font-bold">DAFTAR</button>
-      </div>
+      <input id="u" placeholder="User" class="w-full p-4 rounded-xl bg-[#111b21] mb-4 outline-none">
+      <input id="p" type="password" placeholder="Pass" class="w-full p-4 rounded-xl bg-[#111b21] mb-6 outline-none">
+      <button onclick="auth('/login')" class="w-full bg-emerald-600 p-4 rounded-xl font-bold mb-3">LOGIN</button>
+      <button onclick="auth('/register')" class="w-full bg-[#2a3942] p-4 rounded-xl font-bold">DAFTAR</button>
     </div>
     <script>
-      async function auth(path) {
+      async function auth(p) {
         const fd = new FormData(); fd.append('username', u.value); fd.append('password', p.value);
-        const res = await fetch(path, { method: 'POST', body: fd });
-        if(res.ok) window.location.reload();
-        else { const t = await res.text(); err.innerText = t; err.classList.remove('hidden'); }
+        const r = await fetch(p, { method: 'POST', body: fd });
+        if(r.ok) location.reload(); else alert('Gagal');
       }
     </script>
   </body></html>`;
 }
 
-function renderMainApp(user) {
+function renderMain(user) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><script src="https://cdn.tailwindcss.com"></script>
-  <style>body{background:#0b141a;color:#e9edef;font-family:sans-serif;overflow:hidden;} .wa-bg{background-color:#0b141a;background-image:url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');background-blend-mode:overlay;} .avatar{width:45px;height:45px;border-radius:50%;object-fit:cover;background:#374151;flex-shrink:0;}</style></head>
+  <style>body{background:#0b141a;color:#e9edef;overflow:hidden;} .wa-bg{background-color:#0b141a;background-image:url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');background-blend-mode:overlay;}</style></head>
   <body class="h-screen flex flex-col">
-    <div class="bg-[#202c33] p-4 flex justify-between items-center text-emerald-500 font-bold text-xl shadow-lg z-10">
+    <div class="bg-[#202c33] p-4 flex justify-between items-center text-emerald-500 font-bold text-xl shadow-lg">
       <div>WhatsApp</div>
-      <div id="myAv" onclick="pMod.classList.remove('hidden')" class="cursor-pointer"></div>
+      <div id="myAv" onclick="pMod.classList.remove('hidden')" class="cursor-pointer w-10 h-10 rounded-full bg-gray-600 overflow-hidden"></div>
     </div>
     <div class="flex-1 flex overflow-hidden">
       <div id="side" class="w-full lg:w-96 bg-[#111b21] border-r border-white/5 overflow-y-auto"></div>
       <div id="chat" class="hidden lg:flex flex-1 flex-col wa-bg">
         <div class="p-3 bg-[#202c33] flex items-center gap-3 shadow-md">
           <button onclick="hideChat()" class="lg:hidden text-2xl">←</button>
-          <div id="hAv" class="avatar w-10 h-10"></div>
-          <div class="flex-1 text-sm"><div id="hName" class="font-bold">Pilih Chat</div><div id="hStat" class="text-[10px] opacity-40"></div></div>
+          <div id="hAv" class="w-10 h-10 rounded-full bg-gray-600 overflow-hidden"></div>
+          <div class="flex-1 text-sm"><div id="hName" class="font-bold text-white">Pilih Chat</div><div id="hStat" class="text-[10px] opacity-40"></div></div>
         </div>
         <div id="box" class="flex-1 p-4 overflow-y-auto flex flex-col gap-3"></div>
         <div id="in" class="p-3 bg-[#202c33] flex items-center gap-3 hidden">
           <label class="cursor-pointer text-2xl text-emerald-500"><input type="file" id="fIn" class="hidden" onchange="send()">+</label>
           <input id="mIn" class="flex-1 bg-[#2a3942] p-3 rounded-xl outline-none" placeholder="Ketik pesan..." onkeypress="if(event.key==='Enter')send()">
-          <button onmousedown="vS()" onmouseup="vE()" ontouchstart="vS()" ontouchend="vE()" id="vB" class="p-3 text-xl">🎙️</button>
+          <button onmousedown="vS()" onmouseup="vE()" ontouchstart="vS()" ontouchend="vE()" id="vB" class="p-3">🎙️</button>
           <button onclick="send()" class="bg-emerald-600 p-3 rounded-full">➡️</button>
         </div>
       </div>
     </div>
     <div id="pMod" class="hidden fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-6">
-       <div class="bg-[#202c33] p-8 rounded-3xl text-center w-full max-w-xs border border-white/5">
+       <div class="bg-[#202c33] p-8 rounded-3xl text-center w-full max-w-xs">
           <input type="file" id="pIn" class="hidden" onchange="uP(this)">
-          <div onclick="pIn.click()" id="pAv" class="w-32 h-32 mx-auto rounded-full overflow-hidden bg-zinc-700 mb-6 cursor-pointer border-4 border-emerald-500/20"></div>
+          <div onclick="pIn.click()" id="pAv" class="w-32 h-32 mx-auto rounded-full overflow-hidden bg-zinc-700 mb-6 cursor-pointer border-4 border-emerald-500"></div>
           <button onclick="pMod.classList.add('hidden')" class="w-full bg-emerald-600 p-4 rounded-xl font-bold mb-3">TUTUP</button>
           <a href="/logout" class="block text-red-400 font-bold p-2">LOGOUT</a>
        </div>
@@ -200,98 +179,65 @@ function renderMainApp(user) {
       async function up() {
         try {
           const r = await fetch('/api/data'); 
-          if(r.status === 401) { window.location.reload(); return; }
+          if(!r.ok) return;
           db = await r.json();
-          if(!db || !db.users) return;
           const me = db.users["${user}"];
-          myAv.innerHTML = \`<img src="\${getAv(me.pic)}" class="avatar">\`;
+          myAv.innerHTML = \`<img src="\${getAv(me.pic)}" class="w-full h-full object-cover">\`;
           pAv.innerHTML = \`<img src="\${getAv(me.pic)}" class="w-full h-full object-cover">\`;
           rSide(); if(selU) rChat();
-        } catch(e){ console.error(e); }
+        } catch(e){}
       }
 
       function rSide() {
         const users = Object.keys(db.users).filter(u=>u!=="${user}");
-        if(users.length === 0) {
-          side.innerHTML = '<div class="p-10 text-center opacity-30 text-sm italic">Belum ada pengguna lain.<br>Ajak teman daftar!</div>';
-          return;
-        }
-        side.innerHTML = users.map(u => \`
+        side.innerHTML = users.length ? users.map(u => \`
           <div onclick="openChat('\${u}')" class="p-4 flex items-center gap-4 hover:bg-[#202c33] cursor-pointer \${selU===u?'bg-[#2a3942]':''}">
-            <img src="\${getAv(db.users[u].pic)}" class="avatar">
+            <img src="\${getAv(db.users[u].pic)}" class="w-12 h-12 rounded-full object-cover">
             <div class="flex-1 border-b border-white/5 pb-2 truncate text-left">
-              <div class="font-bold text-[#e9edef]">\${db.users[u].name || u}</div>
-              <div class="text-xs text-[#8696a0]">\${db.users[u].bio || 'Available'}</div>
+              <div class="font-bold">\${db.users[u].name || u}</div>
+              <div class="text-xs opacity-40 text-white">\${db.users[u].bio || 'Available'}</div>
             </div>
-          </div>\`).join('');
+          </div>\`).join('') : '<div class="p-10 text-center opacity-30">Belum ada teman</div>';
       }
 
-      function openChat(u) { 
-        selU = u; 
-        const chatBox = document.getElementById('chat');
-        chatBox.classList.remove('hidden'); 
-        chatBox.classList.add('fixed','inset-0','z-40'); 
-        document.getElementById('in').classList.remove('hidden'); 
-        rChat(); 
-      }
-      
-      function hideChat() { 
-        const chatBox = document.getElementById('chat');
-        chatBox.classList.add('hidden'); 
-        chatBox.classList.remove('fixed','inset-0'); 
-        selU = ''; 
-      }
+      function openChat(u) { selU = u; chat.classList.remove('hidden'); chat.classList.add('fixed','inset-0','z-40'); document.getElementById('in').classList.remove('hidden'); up(); }
+      function hideChat() { chat.classList.add('hidden'); chat.classList.remove('fixed','inset-0'); selU = ''; }
 
       function rChat() {
         const u = db.users[selU]; hName.innerText = u.name || selU;
-        hAv.innerHTML = \`<img src="\${getAv(u.pic)}" class="w-full h-full object-cover rounded-full">\`;
+        hAv.innerHTML = \`<img src="\${getAv(u.pic)}" class="w-full h-full object-cover">\`;
         hStat.innerText = (Date.now()-u.lastSeen)<15000 ? 'online' : 'last seen recently';
         const cId = ["${user}", selU].sort().join("_");
         box.innerHTML = (db.privateChats[cId] || []).map(m => \`
-          <div class="flex \${m.from==='${user}'?'justify-end':'justify-start'}" oncontextmenu="event.preventDefault(); sO('\${cId}','\${m.id}')">
-            <div class="max-w-[85%] p-3 rounded-xl \${m.from==='${user}'?'bg-[#005c4b]':'bg-[#202c33]'} shadow-sm">
-              \${m.fileId ? (m.fileType==='image' ? \`<img src="/api/media?id=\${m.fileId}" class="rounded-lg mb-1"> \` : \`<video src="/api/media?id=\${m.fileId}" controls class="rounded-lg mb-1"></video>\`) : ''}
+          <div class="flex \${m.from==='${user}'?'justify-end':'justify-start'}">
+            <div class="max-w-[85%] p-3 rounded-xl \${m.from==='${user}'?'bg-[#005c4b] text-white':'bg-[#202c33] text-white'} shadow-sm">
+              \${m.fileId ? (m.fileType==='image' ? \`<img src="/api/media?id=\${m.fileId}" class="rounded-lg mb-1 max-h-60"> \` : \`<video src="/api/media?id=\${m.fileId}" controls class="rounded-lg mb-1"></video>\`) : ''}
               \${m.fileType==='audio' ? \`<audio src="/api/media?id=\${m.fileId}" controls class="w-48"></audio>\` : ''}
               <div class="text-[14px]">\${m.text}</div>
               <div class="text-[9px] text-right opacity-40 mt-1">\${m.time}</div>
             </div>
           </div>\`).join('') + '<div id="bot"></div>';
-        const bot = document.getElementById('bot');
-        if(bot) bot.scrollIntoView();
-      }
-
-      function sO(cId, mId) {
-        if(!confirm('Hapus pesan?')) return;
-        const mode = confirm('Hapus untuk semua?') ? 'everyone' : 'me';
-        const fd = new FormData(); fd.append('action','delete_msg'); fd.append('chatId',cId); fd.append('msgId',mId); fd.append('mode',mode);
-        fetch('/', {method:'POST', body:fd}).then(up);
+        document.getElementById('bot').scrollIntoView();
       }
 
       async function send() {
-        const mInput = document.getElementById('mIn');
-        const fInput = document.getElementById('fIn');
-        if(!mInput.value && !fInput.files[0]) return;
-        const fd = new FormData(); fd.append('action','chat'); fd.append('to',selU); fd.append('message',mInput.value);
-        if(fInput.files[0]) fd.append('file', fInput.files[0]);
-        mInput.value=''; fInput.value=''; await fetch('/',{method:'POST', body:fd}); up();
+        const m = mIn.value, f = fIn.files[0];
+        if(!m && !f) return;
+        const fd = new FormData(); fd.append('action','chat'); fd.append('to',selU); fd.append('message',m);
+        if(f) fd.append('file', f);
+        mIn.value=''; fIn.value=''; await fetch('/',{method:'POST', body:fd}); up();
       }
 
-      async function vS() {
-        chunks=[]; try {
-          const s=await navigator.mediaDevices.getUserMedia({audio:true});
-          rec=new MediaRecorder(s); vB.innerText='🔴'; rec.ondataavailable=e=>chunks.push(e.data);
-          rec.onstop=async()=>{
-            vB.innerText='🎙️'; const fd=new FormData(); fd.append('action','vn'); fd.append('to',selU); fd.append('file',new Blob(chunks,{type:'audio/ogg'}),'v.ogg');
-            await fetch('/',{method:'POST', body:fd}); up();
-          }; rec.start();
-        } catch(e){ alert("Izin Mic ditolak"); }
+      async function uP(i) {
+        if(!i.files[0]) return;
+        const fd = new FormData(); fd.append('action','update_profile'); fd.append('file', i.files[0]);
+        await fetch('/',{method:'POST', body:fd}); up();
       }
-      function vE(){if(rec && rec.state!=='inactive')rec.stop();}
-      async function uP(i){
-        const fd=new FormData(); fd.append('action','update_profile'); fd.append('file',i.files[0]);
-        await fetch('/',{method:'POST',body:fd}); up();
-      }
+
+      async function vS() { chunks=[]; const s=await navigator.mediaDevices.getUserMedia({audio:true}); rec=new MediaRecorder(s); vB.innerText='🔴'; rec.ondataavailable=e=>chunks.push(e.data); rec.onstop=async()=>{ vB.innerText='🎙️'; const fd=new FormData(); fd.append('action','vn'); fd.append('to',selU); fd.append('file',new Blob(chunks,{type:'audio/ogg'}),'v.ogg'); await fetch('/',{method:'POST', body:fd}); up(); }; rec.start(); }
+      function vE(){ if(rec) rec.stop(); }
+
       setInterval(up, 5000); up();
     </script>
   </body></html>`;
-        }
+      }
