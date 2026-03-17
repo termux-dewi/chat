@@ -12,7 +12,7 @@ export default {
     const user = (cookie.match(/(?:^|; )user_session=([^;]*)/) || [])[1];
     const token = await getAccessToken();
 
-    // 1. AUTH
+    // 1. AUTH & LOGIN
     if (request.method === "POST" && (url.pathname === "/login" || url.pathname === "/register")) {
       const fd = await request.formData();
       const u = (fd.get("username") || "").trim().toLowerCase();
@@ -31,7 +31,7 @@ export default {
 
     if (!user) return new Response(renderAuth(), { headers: { "Content-Type": "text/html" } });
 
-    // 2. API
+    // 2. DATA API
     if (url.pathname === "/api/data") {
       let db = await getDB(token);
       if (db.users[user]) { db.users[user].lastSeen = Date.now(); await saveDB(token, db); }
@@ -41,38 +41,41 @@ export default {
     if (url.pathname === "/api/media") {
       const id = url.searchParams.get("id");
       const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, {
-        headers: { 'Authorization': `Bearer ${token}`, 'Range': request.headers.get("Range") || "" }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       return new Response(driveRes.body, { headers: { "Content-Type": driveRes.headers.get("Content-Type") || "image/jpeg" } });
     }
 
-    // 3. UPLOAD & CHAT
+    // 3. ACTION POST
     if (request.method === "POST") {
       const fd = await request.formData();
       const action = fd.get("action");
       let db = await getDB(token);
 
-      if (action === "chat" || action === "vn" || action === "update_profile") {
-        const file = fd.get("file");
-        let mediaId = null;
-        if (file && file.size > 0) mediaId = await uploadToDrive(token, file);
-
-        if (action === "update_profile") {
-          if (mediaId) db.users[user].pic = mediaId;
-          db.users[user].name = fd.get("name") || db.users[user].name;
-        } else {
-          const to = fd.get("to");
-          const chatId = [user, to].sort().join("_");
-          if (!db.privateChats[chatId]) db.privateChats[chatId] = [];
-          db.privateChats[chatId].push({
-            id: "m_" + Date.now(), from: user, text: fd.get("message") || "",
-            fileId: mediaId, fileType: action === "vn" ? "audio" : (file && file.type.startsWith("image") ? "image" : "text"),
-            time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-          });
-        }
-        await saveDB(token, db);
-        return new Response("OK");
+      const file = fd.get("file");
+      let mediaId = null;
+      if (file && file.size > 0) {
+        mediaId = await uploadToDrive(token, file);
       }
+
+      if (action === "update_profile") {
+        if (mediaId) db.users[user].pic = mediaId;
+        db.users[user].name = fd.get("name") || db.users[user].name;
+      } else {
+        const to = fd.get("to");
+        const chatId = [user, to].sort().join("_");
+        if (!db.privateChats[chatId]) db.privateChats[chatId] = [];
+        db.privateChats[chatId].push({
+          id: "m_" + Date.now(),
+          from: user,
+          text: fd.get("message") || "",
+          fileId: mediaId, // Sekarang tersimpan dengan benar
+          fileType: action === "vn" ? "audio" : (file && file.type.startsWith("image") ? "image" : "text"),
+          time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+        });
+      }
+      await saveDB(token, db);
+      return new Response("OK");
     }
 
     if (url.pathname === "/logout") return new Response("OK", { headers: { "Set-Cookie": "user_session=; Path=/; Max-Age=0", "Location": "/" }, status: 302 });
@@ -81,7 +84,7 @@ export default {
   }
 };
 
-// --- DRIVE CORE ---
+// --- DRIVE FUNCTIONS ---
 async function getDB(token) {
   try {
     const r = await fetch(`https://www.googleapis.com/drive/v3/files/${CONFIG.driveFileId}?alt=media`, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -91,16 +94,13 @@ async function getDB(token) {
 async function saveDB(token, db) {
   await fetch(`https://www.googleapis.com/upload/drive/v3/files/${CONFIG.driveFileId}?uploadType=media`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(db) });
 }
-
 async function uploadToDrive(token, file) {
-  const metadata = { name: `${Date.now()}_${file.name}`, parents: [CONFIG.folderId] };
+  const metadata = { name: `upload_${Date.now()}`, parents: [CONFIG.folderId] };
   const boundary = "BNDRY_" + Math.random().toString(36).substring(2);
   const head = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`;
   const tail = `\r\n--${boundary}--`;
-  
   const buf = await file.arrayBuffer();
   const body = new Uint8Array([...new TextEncoder().encode(head), ...new Uint8Array(buf), ...new TextEncoder().encode(tail)]);
-
   const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
@@ -109,7 +109,6 @@ async function uploadToDrive(token, file) {
   const res = await r.json();
   return res.id || null;
 }
-
 async function getAccessToken() {
   const pem = CONFIG.privateKey.trim().replace(/\\n/g, '\n');
   const pemBody = pem.split('-----')[2].replace(/\s/g, '');
@@ -119,10 +118,10 @@ async function getAccessToken() {
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(`${h}.${p}`));
   const jwt = `${h}.${p}.${btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\//g, '_').replace(/\+/g, '-').replace(/=/g, '')}`;
   const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }) });
-  const data = await r.json(); return data.access_token;
+  return (await r.json()).access_token;
 }
 
-// --- VIEWS ---
+// --- HTML VIEWS ---
 function renderAuth() {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script></head>
   <body class="bg-[#0b141a] text-[#e9edef] flex items-center justify-center min-h-screen">
@@ -143,8 +142,8 @@ function renderMain(user) {
     body{background:#0b141a;color:#e9edef;font-family:sans-serif;overflow:hidden;}
     .wa-bg{background-color:#0b141a;background-image:url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');background-blend-mode:overlay;}
     .hide-scroll::-webkit-scrollbar { display: none; }
-    .msg-in { border-radius: 12px 12px 12px 0; }
-    .msg-out { border-radius: 12px 12px 0 12px; }
+    .msg-in { border-radius: 0 12px 12px 12px; align-self: flex-start; background: #202c33; }
+    .msg-out { border-radius: 12px 0 12px 12px; align-self: flex-end; background: #005c4b; }
   </style></head>
   <body class="h-screen flex flex-col relative">
     <div class="bg-[#202c33] p-4 flex justify-between items-center text-emerald-500 font-bold text-xl shadow-md z-20">
@@ -159,7 +158,7 @@ function renderMain(user) {
         <div class="p-3 bg-[#202c33] flex items-center gap-3 shadow-sm z-10">
           <button onclick="hideChat()" class="lg:hidden text-2xl">←</button>
           <div id="hAv" class="w-10 h-10 rounded-full overflow-hidden bg-zinc-700"></div>
-          <div class="flex-1"><div id="hName" class="font-bold text-sm">Pilih Chat</div><div id="hStat" class="text-[10px] opacity-50"></div></div>
+          <div class="flex-1"><div id="hName" class="font-bold text-sm text-white">Pilih Chat</div><div id="hStat" class="text-[10px] opacity-50"></div></div>
         </div>
         
         <div id="box" class="flex-1 p-4 overflow-y-auto flex flex-col gap-2 hide-scroll pb-24"></div>
@@ -167,18 +166,18 @@ function renderMain(user) {
         <div id="in" class="absolute bottom-0 left-0 right-0 p-3 bg-[#202c33] flex items-center gap-2 hidden z-30">
           <label class="cursor-pointer p-2 text-emerald-500 text-2xl font-bold"><input type="file" id="fIn" class="hidden" onchange="send()">+</label>
           <input id="mIn" class="flex-1 bg-[#2a3942] p-3 rounded-2xl outline-none text-sm" placeholder="Ketik pesan..." onkeypress="if(event.key==='Enter')send()">
-          <button onmousedown="vS()" onmouseup="vE()" ontouchstart="vS()" ontouchend="vE()" id="vB" class="p-2 text-emerald-500 font-bold">MIC</button>
-          <button onclick="send()" class="bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-bold">KIRIM</button>
+          <button onmousedown="vS()" onmouseup="vE()" ontouchstart="vS()" ontouchend="vE()" id="vB" class="p-2 text-emerald-500 text-xs font-bold">MIC</button>
+          <button onclick="send()" class="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase">Kirim</button>
         </div>
       </div>
     </div>
 
     <div id="pMod" class="hidden fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-6">
-       <div class="bg-[#202c33] p-8 rounded-3xl text-center w-full max-w-xs border border-white/5">
+       <div class="bg-[#202c33] p-8 rounded-3xl text-center w-full max-w-xs">
           <input type="file" id="pIn" class="hidden" onchange="uP(this)">
-          <div onclick="pIn.click()" id="pAv" class="w-32 h-32 mx-auto rounded-full overflow-hidden bg-zinc-700 mb-6 cursor-pointer border-4 border-emerald-500/20"></div>
+          <div onclick="pIn.click()" id="pAv" class="w-32 h-32 mx-auto rounded-full overflow-hidden bg-zinc-700 mb-6 cursor-pointer border-4 border-emerald-500"></div>
           <button onclick="pMod.classList.add('hidden')" class="w-full bg-emerald-600 p-4 rounded-xl font-bold mb-3">TUTUP</button>
-          <a href="/logout" class="block text-red-400 font-bold p-2 text-sm">KELUAR AKUN</a>
+          <a href="/logout" class="block text-red-400 font-bold p-2 text-xs">LOGOUT</a>
        </div>
     </div>
 
@@ -200,12 +199,12 @@ function renderMain(user) {
         const users = Object.keys(db.users).filter(u=>u!=="${user}");
         side.innerHTML = users.length ? users.map(u => \`
           <div onclick="openChat('\${u}')" class="p-4 flex items-center gap-4 hover:bg-[#202c33] cursor-pointer \${selU===u?'bg-[#2a3942]':''}">
-            <img src="\${getAv(db.users[u].pic)}" class="w-12 h-12 rounded-full object-cover bg-zinc-800">
+            <img src="\${getAv(db.users[u].pic)}" class="w-12 h-12 rounded-full object-cover">
             <div class="flex-1 border-b border-white/5 pb-2 truncate">
               <div class="font-bold text-sm">\${db.users[u].name || u}</div>
               <div class="text-[11px] opacity-40">\${db.users[u].bio || 'Available'}</div>
             </div>
-          </div>\`).join('') : '<div class="p-10 text-center opacity-30 text-sm">Belum ada pengguna lain</div>';
+          </div>\`).join('') : '<div class="p-10 text-center opacity-30 text-sm">Belum ada teman</div>';
       }
 
       function openChat(u) { selU = u; const c = document.getElementById('chat'); c.classList.remove('hidden'); c.classList.add('fixed','inset-0','z-40'); document.getElementById('in').classList.remove('hidden'); up(); }
@@ -217,26 +216,30 @@ function renderMain(user) {
         hAv.innerHTML = \`<img src="\${getAv(u.pic)}" class="w-full h-full object-cover">\`;
         hStat.innerText = (Date.now()-u.lastSeen)<15000 ? 'online' : 'last seen recently';
         box.innerHTML = (db.privateChats[cId] || []).map(m => \`
-          <div class="flex \${m.from==='${user}'?'justify-end':'justify-start'} mb-1">
-            <div class="max-w-[85%] p-3 \${m.from==='${user}'?'bg-[#005c4b] msg-out':'bg-[#202c33] msg-in'} shadow-sm">
-              \${m.fileId ? (m.fileType==='image' ? \`<img src="/api/media?id=\${m.fileId}" class="rounded-lg mb-1 max-h-60 w-full object-cover"> \` : \`<audio src="/api/media?id=\${m.fileId}" controls class="w-48"></audio>\`) : ''}
-              <div class="text-[14px] leading-tight">\${m.text}</div>
-              <div class="text-[9px] text-right opacity-40 mt-1">\${m.time}</div>
+          <div class="flex \${m.from==='${user}'?'justify-end':'justify-start'} w-full">
+            <div class="max-w-[80%] p-2 px-3 \${m.from==='${user}'?'msg-out':'msg-in'} shadow-sm text-white">
+              \${m.fileId ? (m.fileType==='image' ? \`<img src="/api/media?id=\${m.fileId}" class="rounded-lg mb-1 max-h-60 w-full object-cover"> \` : \`<audio src="/api/media?id=\${m.fileId}" controls class="w-44 h-8"></audio>\`) : ''}
+              <div class="text-[14px]">\${m.text}</div>
+              <div class="text-[9px] text-right opacity-50 mt-1">\${m.time}</div>
             </div>
-          </div>\`).join('') + '<div id="bot"></div>';
-        const b = document.getElementById('bot'); if(b) b.scrollIntoView({behavior:'smooth'});
+          </div>\`).join('') + '<div id="bot" class="h-1"></div>';
+        document.getElementById('bot').scrollIntoView();
       }
 
       async function send() {
-        if(!mIn.value && !fIn.files[0]) return;
-        const fd = new FormData(); fd.append('action','chat'); fd.append('to',selU); fd.append('message',mIn.value);
-        if(fIn.files[0]) fd.append('file', fIn.files[0]);
-        mIn.value=''; fIn.value=''; await fetch('/',{method:'POST', body:fd}); up();
+        const m = mIn.value, f = fIn.files[0]; if(!m && !f) return;
+        const fd = new FormData(); fd.append('action','chat'); fd.append('to',selU); fd.append('message',m);
+        if(f) fd.append('file', f);
+        mIn.value=''; fIn.value=''; 
+        await fetch('/',{method:'POST', body:fd}); 
+        up();
       }
 
       async function uP(i) {
+        if(!i.files[0]) return;
         const fd = new FormData(); fd.append('action','update_profile'); fd.append('file', i.files[0]);
-        await fetch('/',{method:'POST', body:fd}); up();
+        await fetch('/',{method:'POST', body:fd}); 
+        up();
       }
 
       async function vS() { chunks=[]; const s=await navigator.mediaDevices.getUserMedia({audio:true}); rec=new MediaRecorder(s); vB.innerText='REC'; rec.ondataavailable=e=>chunks.push(e.data); rec.onstop=async()=>{ vB.innerText='MIC'; const fd=new FormData(); fd.append('action','vn'); fd.append('to',selU); fd.append('file',new Blob(chunks,{type:'audio/ogg'}),'v.ogg'); await fetch('/',{method:'POST', body:fd}); up(); }; rec.start(); }
@@ -245,4 +248,4 @@ function renderMain(user) {
       setInterval(up, 5000); up();
     </script>
   </body></html>`;
-                 }
+}
